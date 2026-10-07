@@ -160,3 +160,16 @@ int APS5_VABI scePsmlMfsr2Unknown_o_PNM86gEwFE(void) {
 }
 
 }
+
+// GT7-LOCAL-PLACEHOLDER BEGIN
+extern "C" {
+APS5_EXPORT("DDVUyPyYHTA", gt7Unknown_DDVUyPyYHTA);
+int APS5_VABI gt7Unknown_DDVUyPyYHTA() { NotImplemented_nid_no_patch("libScePsml DDVUyPyYHTA"); return 0; }
+APS5_EXPORT("kLF7WtQ1-Dg", gt7Unknown_kLF7WtQ1_Dg);
+int APS5_VABI gt7Unknown_kLF7WtQ1_Dg() { NotImplemented_nid_no_patch("libScePsml kLF7WtQ1-Dg"); return 0; }
+APS5_EXPORT("lcZD9tJraAw", gt7Unknown_lcZD9tJraAw);
+int APS5_VABI gt7Unknown_lcZD9tJraAw() { NotImplemented_nid_no_patch("libScePsml lcZD9tJraAw"); return 0; }
+APS5_EXPORT("xNZM9Y5lf-M", gt7Unknown_xNZM9Y5lf_M);
+int APS5_VABI gt7Unknown_xNZM9Y5lf_M() { NotImplemented_nid_no_patch("libScePsml xNZM9Y5lf-M"); return 0; }
+}
+// GT7-LOCAL-PLACEHOLDER END

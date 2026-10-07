@@ -53,3 +53,9 @@ int APS5_VABI sceRazorCpuWriteBookmark(const char* label, const char* descriptio
 }
 
 }
+
+// GT7-LOCAL-PLACEHOLDER BEGIN
+extern "C" {
+int APS5_VABI sceRazorCpuPushMarker() { NotImplemented_nid_no_patch(__func__); return 0; }
+}
+// GT7-LOCAL-PLACEHOLDER END

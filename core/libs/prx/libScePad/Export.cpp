@@ -250,3 +250,13 @@ int APS5_VABI scePadUnknown_fCWdlnmB1Ks(void) {
 }
 
 }
+
+// GT7-LOCAL-PLACEHOLDER BEGIN
+extern "C" {
+int APS5_VABI scePadGetFeatureReport() { NotImplemented_nid_no_patch(__func__); return 0; }
+int APS5_VABI scePadOpenExt() { NotImplemented_nid_no_patch(__func__); return 0; }
+int APS5_VABI scePadOutputReport() { NotImplemented_nid_no_patch(__func__); return 0; }
+int APS5_VABI scePadReadExt() { NotImplemented_nid_no_patch(__func__); return 0; }
+int APS5_VABI scePadSetFeatureReport() { NotImplemented_nid_no_patch(__func__); return 0; }
+}
+// GT7-LOCAL-PLACEHOLDER END

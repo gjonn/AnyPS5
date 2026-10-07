@@ -196,3 +196,9 @@ int APS5_VABI sceNpGetUserIdByAccountId() {
 }
 
 }
+
+// GT7-LOCAL-PLACEHOLDER BEGIN
+extern "C" {
+int APS5_VABI sceNpUnregisterNpReachabilityStateCallback() { NotImplemented_nid_no_patch(__func__); return 0; }
+}
+// GT7-LOCAL-PLACEHOLDER END

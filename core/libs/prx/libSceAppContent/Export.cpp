@@ -128,3 +128,10 @@ int APS5_VABI sceAppContentUnknown00(void) {
     return 0;
 }
 }
+
+// GT7-LOCAL-PLACEHOLDER BEGIN
+extern "C" {
+int APS5_VABI sceAppContentDownloadDataFormat() { NotImplemented_nid_no_patch(__func__); return 0; }
+int APS5_VABI sceAppContentGetAddcontDownloadProgress() { NotImplemented_nid_no_patch(__func__); return 0; }
+}
+// GT7-LOCAL-PLACEHOLDER END
