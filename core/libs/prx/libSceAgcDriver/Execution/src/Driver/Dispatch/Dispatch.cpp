@@ -1,6 +1,7 @@
 #include "prx/libSceAgcDriver/Execution/include/ProfileOutput.hpp"
 #include "prx/libSceAgcDriver/Execution/include/PerformanceTimer.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
+#include "prx/libSceAgcDriver/Execution/include/Driver/Draw/DrawPipeline.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Diagnostics.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Shaders/ShaderRegistry.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
@@ -82,6 +83,7 @@ void Driver::dispatch(QueueState& queue, std::span<const std::uint32_t> packet, 
             pendingDispatchPhases().outcome = DispatchOutcome::FillHle;
             return;
         }
+        if (DrawPipeline::Active()) DrawPipeline::Queue0().Drain(DrawPipeline::DrainReason::Packet, 0x15);
         if (!partialLastGroup && indirectArguments == 0 && copyBuffer(queue, submission.queue, packet, std::span(snapshot.code).subspan(codeOffset), userData, compute, localDevice, address)) {
             pendingDispatchPhases().outcome = DispatchOutcome::CopyHle;
             return;
