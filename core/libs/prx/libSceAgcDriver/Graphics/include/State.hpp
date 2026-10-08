@@ -3,6 +3,7 @@
 
 #include "prx/libSceAgcDriver/Graphics/include/Context.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/ColorTargetLayout.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/GuestTextureResource.hpp"
 #include "prx/libSceAgcDriver/Execution/include/QueueState.hpp"
 #include <vector>
 #include <array>
@@ -51,6 +52,7 @@ struct ColorTarget {
     std::uint32_t slot = 0;
     std::uint32_t depth = 1;
     std::uint32_t depthSlice = 0;
+    std::uint32_t layers = 1;
     std::uint32_t exportIndex = 0;
 };
 
@@ -87,6 +89,8 @@ struct State {
     bool hasColorTarget;
     bool rectList = false;
     VkExtent2D renderExtent;
+    std::uint32_t renderLayers = 1;
+    std::uint32_t layerExports = 0;
     VkPrimitiveTopology topology;
     bool primitiveRestart = false;
     VkViewport viewport;
@@ -106,6 +110,7 @@ std::array<std::uint8_t, 8> ExportMappings(const State& state);
 std::uint32_t ReversedBlend(const State& state);
 ColorTarget DecodeColorBuffer(const Registers& context, std::uint32_t slot);
 std::uint32_t ColorWriteMask(const Registers& context);
+GuestTextureResource SurfaceForTarget(const ColorTarget& color);
 
 struct ColorMetadataPass {
     enum class Mode { EliminateFastClear, DccDecompress };
