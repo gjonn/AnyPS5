@@ -669,6 +669,61 @@ static void CheckHeapAfterMappingReuse() {
     GuestHeap::GuestHeapFree_nid_postfix(pointer);
 }
 
+#ifdef _WIN32
+static int g_accessViolations = 0;
+
+static LONG WINAPI CountAccessViolations(EXCEPTION_POINTERS* info) {
+    if (info->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) ++g_accessViolations;
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
+
+static void CheckSingleDirectMappingTracksWritesWithoutFaults() {
+#ifdef _WIN32
+    constexpr std::size_t page = 0x4000;
+    std::int64_t phys = 0;
+    Require(sceKernelAllocateDirectMemory(0, 0x7fffffffffll, page * 4, 0, 0, &phys) == 0);
+    void* mapped = nullptr;
+    Require(sceKernelMapDirectMemory(&mapped, page * 4, 3, 0, phys, 0) == 0);
+    const auto collect = [](void* address, std::size_t bytes) {
+        std::array<void*, 32> pages{};
+        std::size_t count = pages.size();
+        Require(GuestArena::GuestArenaCollectWrites_nid_postfix(reinterpret_cast<std::uintptr_t>(address), bytes, pages.data(), &count, true));
+        return count;
+    };
+    auto* bytes = static_cast<volatile unsigned char*>(mapped);
+    Require(collect(mapped, page * 4) == 16);
+    Require(collect(mapped, page * 4) == 0);
+    void* const handler = AddVectoredExceptionHandler(1, CountAccessViolations);
+    Require(handler != nullptr);
+    bytes[page + 0x1000] = 7;
+    bytes[page * 3] = 9;
+    Require(RemoveVectoredExceptionHandler(handler) != 0);
+    Require(g_accessViolations == 0);
+    Require(collect(mapped, page * 4) == 2);
+    Require(collect(mapped, page * 4) == 0);
+    Require(sceKernelMunmap(static_cast<unsigned char*>(mapped) + page * 2, page) == 0);
+    Require(bytes[page + 0x1000] == 7 && bytes[page * 3] == 9);
+    bytes[0] = 5;
+    Require(collect(mapped, page * 2) != 0);
+    Require(collect(mapped, page * 2) == 0);
+    void* second = nullptr;
+    Require(sceKernelMapDirectMemory(&second, page, 3, 0, phys + page, 0) == 0);
+    Require(static_cast<unsigned char*>(second)[0x1000] == 7);
+    static_cast<volatile unsigned char*>(second)[0x1001] = 11;
+    Require(bytes[page + 0x1001] == 11);
+    Require(collect(mapped, page * 2) != 0);
+    Require(sceKernelMunmap(second, page) == 0);
+    Require(sceKernelMunmap(mapped, page * 2) == 0);
+    Require(sceKernelMunmap(static_cast<unsigned char*>(mapped) + page * 3, page) == 0);
+    void* again = nullptr;
+    Require(sceKernelMapDirectMemory(&again, page * 4, 3, 0, phys, 0) == 0);
+    const auto* data = static_cast<const unsigned char*>(again);
+    Require(data[0] == 5 && data[page + 0x1000] == 7 && data[page + 0x1001] == 11 && data[page * 2] == 0 && data[page * 3] == 9);
+    Require(sceKernelMunmap(again, page * 4) == 0);
+    Require(sceKernelReleaseDirectMemory(phys, page * 4) == 0);
+#endif
+}
 static void CheckSharedWriteTracking() {
 #ifdef _WIN32
     constexpr std::size_t page = 0x4000;
@@ -1081,6 +1136,7 @@ int main() {
     CheckSharedWriteTracking();
     CheckReadsIntoSharedWriteTracking();
     CheckPinnedSharedPages();
+    CheckSingleDirectMappingTracksWritesWithoutFaults();
 #if defined(__linux__)
     CheckWriteWatch();
     CheckDirectMemoryWriteWatch();
