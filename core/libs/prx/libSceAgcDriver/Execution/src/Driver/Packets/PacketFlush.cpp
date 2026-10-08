@@ -52,7 +52,7 @@ void Driver::flushBetweenPackets(std::uint32_t queue, std::uint32_t header, bool
     }
     if (reap) lastReapTry = now;
     if (DrawPipeline::Active() && (submit || record || capped || recordAtLock)) {
-        static const bool committerSubmits = std::getenv("APS5_PIPELINE_DRAIN_LABELS") == nullptr;
+        static const bool committerSubmits = std::getenv("APS5_PIPELINE_ORDERED_LABELS") != nullptr;
         if (committerSubmits && !record && !recordAtLock && DrawPipeline::Queue0().Busy()) return;
         DrawPipeline::Queue0().Drain(DrawPipeline::DrainReason::Flush);
     }

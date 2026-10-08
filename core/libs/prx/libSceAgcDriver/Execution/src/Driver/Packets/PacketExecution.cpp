@@ -67,7 +67,7 @@ void Driver::tolerate(const char* kind, TWork&& work) {
 
 void Driver::execute(const Submission& submission) {
     const bool pipelined = submission.queue == 0 && DrawPipeline::Depth() != 0;
-    static const bool orderedWaits = std::getenv("APS5_PIPELINE_DRAIN_LABELS") == nullptr;
+    static const bool orderedWaits = std::getenv("APS5_PIPELINE_ORDERED_LABELS") != nullptr;
     DrawPipeline::Active() = pipelined;
     struct PipelineDrain {
         bool pipelined;
