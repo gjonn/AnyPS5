@@ -2617,6 +2617,7 @@ void ShaderResources::resolveImageBinding(const ShaderRecompiler::DescriptorBind
             if (IsNullTextureDescriptor(words) && binding.imageShape.has_value()) {
                 textures.push_back(nullTexture(context, *binding.imageShape, !binding.imageDepthCompare.empty() && binding.imageDepthCompare.at(element)));
                 textureFirstLayer.push_back(false);
+                textureBaseLevel.push_back(false);
                 describedRanges.push_back({"texture", 0, 0, 1, 1, 56, 0, 0});
                 item.imageAllocations.push_back(textures.size() - 1);
                 continue;
