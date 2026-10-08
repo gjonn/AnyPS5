@@ -111,7 +111,8 @@ void Driver::run(std::uint32_t id) noexcept {
                 const auto ready = [&] { return failure || stopping || !pending.empty(); };
 
                 while (!ready()) {
-                    if (!completionsPending() || (id != 0 && Graphics::Recorder::PendingCompletionLabels() == 0)) {
+                    const bool commitsPending = id == 0 && DrawPipeline::Queue0().Busy();
+                    if (!commitsPending && (!completionsPending() || (id != 0 && Graphics::Recorder::PendingCompletionLabels() == 0))) {
                         if (id == 0) queue0Dormant.store(true, std::memory_order_relaxed);
                         changed.wait(lock, ready);
                         if (id == 0) queue0Dormant.store(false, std::memory_order_relaxed);

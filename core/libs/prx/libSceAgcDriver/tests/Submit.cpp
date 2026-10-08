@@ -200,6 +200,10 @@ void testEndOfPipeInterrupts() {
     AgcDriverWaitIdle_nid_postfix();
     check(label != 0, "send-data release did not write its label");
     check(owner->GetTriggeredEvents(events.data(), 2) == 0, "release with INT_SEL send data after write confirm raised an interrupt");
+    words = {0xc0064900, 0, 3u << 24u, 0, 0, 0, 0, 0};
+    check(sceAgcDriverSubmitDcb(&packet) == 0, "empty send-data release submit failed");
+    AgcDriverWaitIdle_nid_postfix();
+    check(owner->GetTriggeredEvents(events.data(), 2) == 0, "empty send-data release raised an interrupt");
     words = {0xc0064900, 0, 1u << 24u, 0, 0, 0, 0, 0};
     check(sceAgcDriverDeleteEqEvent(eq, 0) == 0, "graphics event deletion failed");
     expectFailure([&] { sceAgcDriverDeleteEqEvent(eq, 0); });

@@ -303,7 +303,8 @@ void Driver::commitDmaStore(std::uint32_t queue, std::uint64_t address, std::spa
 bool Driver::enqueueLabelPacket(std::span<const std::uint32_t> packet, std::uint32_t opcode, std::uint32_t queue) {
     static const bool ordered = std::getenv("APS5_PIPELINE_ORDERED_LABELS") != nullptr;
     if (!ordered || !DeferLabels() || (opcode != 0x49 && opcode != 0x37)) return false;
-    const bool endOfPipeInterrupt = opcode == 0x49 && ((packet[2] >> 24u) & 7u) != 0;
+    const auto interruptSelect = (packet[2] >> 24u) & 7u;
+    const bool endOfPipeInterrupt = opcode == 0x49 && interruptSelect != 0 && interruptSelect != 3;
     const auto label = Pm4::DecodeLabelWrite(packet);
     if (!label.has_value()) {
         if (opcode != 0x49) return false;
