@@ -180,6 +180,7 @@ void decodeDepth(const Registers& cx, std::uint32_t depthControl, State& result)
     Require(!stencil || stencilReadOnly || base(0x015, 0x01d) == depth.stencilAddress, "stencil read and written at different addresses is unsupported");
     const auto size = read(cx, 0x007);
     depth.extent = {(size & 0x3fffu) + 1u, ((size >> 16u) & 0x3fffu) + 1u};
+    if (const auto slice = view & 0x7ffu, lastSlice = (view >> 13u) & 0x7ffu; lastSlice > slice && (read(cx, 0x207) & LayerExports) != 0) depth.layers = lastSlice + 1u - slice;
     if (const auto slice = view & 0x1fffu; slice != 0) {
         if (depth.address != 0) depth.address += static_cast<std::uint64_t>(slice) * DepthSliceBytes(depth.extent, zFormat == 1 ? 2u : 4u);
         if (depth.stencilAddress != 0) depth.stencilAddress += static_cast<std::uint64_t>(slice) * DepthSliceBytes(depth.extent, 1u);
@@ -567,7 +568,7 @@ State DecodeState(const QueueState& queue) {
         result.renderLayers = result.color.layers;
         for (const auto& color : result.colors) Require(color.layers == result.renderLayers, "color targets with different layer counts are unsupported");
         if (result.renderLayers > 1) {
-            Require(!result.depth, "layered rendering with a depth target is unsupported");
+            Require(!result.depth || result.depth->layers == result.renderLayers, "layered rendering with a depth target of another layer count is unsupported");
             result.layerExports = read(cx, 0x207) & (1u << 18u);
         }
         if (result.depth) result.renderExtent = {std::min(result.renderExtent.width, result.depth->extent.width), std::min(result.renderExtent.height, result.depth->extent.height)};
@@ -748,8 +749,8 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
         color.depthSlice = slice;
         color.layers = std::min(lastSlice + 1u, color.depth) - slice;
     } else if (slice != lastSlice && (read(cx, 0x207) & LayerExports) != 0) {
-        color.arraySize = (attrib3 & 0x1fffu) + 1u;
-        Require(lastSlice < color.arraySize && lastSlice > slice, "the color view slices are outside the array surface");
+        color.arraySize = std::max((attrib3 & 0x1fffu) + 1u, lastSlice + 1u);
+        Require(lastSlice > slice, "the color view slices are reversed");
         color.depthSlice = slice;
         color.layers = lastSlice + 1u - slice;
     }
