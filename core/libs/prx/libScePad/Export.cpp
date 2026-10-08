@@ -260,8 +260,15 @@ int APS5_VABI scePadVrControllerRead() {
  return 0;
 }
 
-APS5_EXPORT("fCWdlnmB1Ks", scePadUnknown_fCWdlnmB1Ks);
-int APS5_VABI scePadUnknown_fCWdlnmB1Ks(void) {
+int APS5_VABI scePadIsRemoteController(int handle, bool* remote) {
+ if (handle != PAD_HANDLE) return PAD_ERROR_INVALID_HANDLE;
+ if (remote == nullptr) return PAD_ERROR_INVALID_ARG;
+ *remote = false;
+ return 0;
+}
+
+
+int APS5_VABI scePadSetAngularVelocityBiasCorrectionState() {
  NotImplemented_nid_no_patch(__func__);
  return 0;
 }

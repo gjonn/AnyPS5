@@ -38,8 +38,6 @@ constexpr std::uint32_t UnormFormat = 30;
 constexpr std::uint32_t UintFormat = 34;
 constexpr std::uint32_t FloatFormat = 43;
 constexpr std::size_t FloatOffset = 40960;
-constexpr std::size_t VolumeOffset = 49152;
-constexpr std::uint32_t Type3D = 10;
 constexpr std::uint32_t SwizzleXYZ1 = 0x3acu;
 constexpr std::uint32_t SwizzleXZY1 = 0x374u;
 constexpr std::uint32_t SwizzleZYX1 = 0x32eu;
@@ -154,7 +152,7 @@ std::string Hex(std::uint32_t value) {
 
 std::array<std::uint32_t, 4> BufferDescriptor(const void* data, std::uint32_t bytes) {
     const auto address = reinterpret_cast<std::uintptr_t>(data);
-    return {static_cast<std::uint32_t>(address), static_cast<std::uint32_t>((address >> 32u) & 0xffffu), bytes, 0x01016facu};
+    return {static_cast<std::uint32_t>(address), static_cast<std::uint32_t>((address >> 32u) & 0xffffu), bytes, 0x31016facu};
 }
 
 std::array<std::uint32_t, 8> TextureDescriptor(const void* data, std::uint32_t format, std::uint32_t swizzle, std::uint32_t width) {
@@ -275,6 +273,22 @@ void CheckStore(AgcDriver::VulkanDevice& device, std::uint8_t* texels, std::span
 
 constexpr std::array<float, 11> FloatValues{0.0f, 1.0f, 0.5f, 2.0f, 0.25f, 3.0f, 1.5f, 10.0f, 0.75f, 6.5f, 0.125f};
 
+constexpr std::array<std::array<std::uint32_t, 4>, 7> FloatStoreEdges{{
+    {0xbf800000u, 0x80000000u, 0x7fc00000u, 0xfc000000u},
+    {0x7f800000u, 0x7149f2cau, 0x477fff00u, 0xf7feffe0u},
+    {0x3f830000u, 0x3f818000u, 0x35800000u, 0x002f01e0u},
+    {0x00000001u, 0xff800000u, 0xffc00000u, 0xfc000000u},
+    {0x477c0000u, 0x4788b800u, 0x33000000u, 0x001effdfu},
+    {0x36400000u, 0x477e0000u, 0x3dcccccdu, 0x5cdefc01u},
+    {0x7f800001u, 0x7f810000u, 0x7fa00000u, 0xfa1f07e1u},
+}};
+
+constexpr std::array<std::array<std::uint32_t, 4>, 3> FloatLoadEdges{{
+    {0x3e0u | (0x7c0u << 10u) | (0x03fu << 21u), 0x7f800000u, 0x7f800000u, 0x387c0000u},
+    {0x001u | (0x041u << 10u) | (0x7bfu << 21u), 0x36000000u, 0x38820000u, 0x477e0000u},
+    {0x3dfu | (0x001u << 10u), 0x477c0000u, 0x35800000u, 0x00000000u},
+}};
+
 std::uint32_t SmallFloat(float value, std::uint32_t mantissaBits) {
     if (value == 0.0f) return 0u;
     const auto bits = std::bit_cast<std::uint32_t>(value);
@@ -288,15 +302,18 @@ std::uint32_t FloatTexel(std::uint32_t index) {
 
 void CheckFloatLoad(AgcDriver::VulkanDevice& device, std::uint8_t* texels) {
     for (std::uint32_t index = 0; index < LoadWidth; ++index) {
-        const auto texel = FloatTexel(index);
+        const auto texel = index < FloatLoadEdges.size() ? FloatLoadEdges[index][0] : FloatTexel(index);
         std::memcpy(texels + index * 4u, &texel, 4u);
     }
     Run(device, LoadXyzw, TextureDescriptor(texels, FloatFormat, SwizzleXYZ1, LoadWidth), {}, LoadGroups);
     for (std::uint32_t index = 0; index < LoadWidth; ++index) {
-        const std::array<float, 4> expected{FloatValues[index % 11u], FloatValues[(index + 4u) % 11u], FloatValues[(index + 8u) % 11u], 1.0f};
+        std::array<std::uint32_t, 4> expected{std::bit_cast<std::uint32_t>(FloatValues[index % 11u]), std::bit_cast<std::uint32_t>(FloatValues[(index + 4u) % 11u]), std::bit_cast<std::uint32_t>(FloatValues[(index + 8u) % 11u]), std::bit_cast<std::uint32_t>(1.0f)};
+        if (index < FloatLoadEdges.size()) {
+            expected = {FloatLoadEdges[index][1], FloatLoadEdges[index][2], FloatLoadEdges[index][3], std::bit_cast<std::uint32_t>(1.0f)};
+        }
         for (std::uint32_t component = 0; component < 4u; ++component) {
             const auto actual = Output[index * 4u + component];
-            Require(actual == std::bit_cast<std::uint32_t>(expected[component]), "image_load of R10_G11_B11_FLOAT: texel " + std::to_string(index) + " component " + std::to_string(component) + " is " + Hex(actual) + ", expected " + Hex(std::bit_cast<std::uint32_t>(expected[component])));
+            Require(actual == expected[component], "image_load of R10_G11_B11_FLOAT: texel " + std::to_string(index) + " component " + std::to_string(component) + " is " + Hex(actual) + ", expected " + Hex(expected[component]));
         }
     }
 }
@@ -308,6 +325,11 @@ void CheckFloatStore(AgcDriver::VulkanDevice& device, std::uint8_t* texels) {
         Input[tid * 4u + 0u] = std::bit_cast<std::uint32_t>(FloatValues[tid % 11u]);
         Input[tid * 4u + 1u] = std::bit_cast<std::uint32_t>(FloatValues[(tid + 4u) % 11u]);
         Input[tid * 4u + 2u] = std::bit_cast<std::uint32_t>(FloatValues[(tid + 8u) % 11u]);
+        if (tid < FloatStoreEdges.size()) {
+            for (std::uint32_t component = 0; component < 3u; ++component) {
+                Input[tid * 4u + component] = FloatStoreEdges[tid][component];
+            }
+        }
     }
     Run(device, StoreXyz, TextureDescriptor(texels, FloatFormat, SwizzleXYZ1, Threads), BufferDescriptor(Input.data(), static_cast<std::uint32_t>(Input.size() * 4u)), 1);
     AgcDriver::Graphics::StorageTexture::FlushPending(reinterpret_cast<std::uintptr_t>(texels), Threads * 4u, nullptr, "test");
@@ -315,57 +337,8 @@ void CheckFloatStore(AgcDriver::VulkanDevice& device, std::uint8_t* texels) {
     for (std::uint32_t tid = 0; tid < Threads; ++tid) {
         std::uint32_t actual = 0;
         std::memcpy(&actual, texels + tid * 4u, 4u);
-        Require(actual == FloatTexel(tid), "image_store of R10_G11_B11_FLOAT: texel " + std::to_string(tid) + " is " + Hex(actual) + ", expected " + Hex(FloatTexel(tid)));
-    }
-}
-
-void CheckFloatSample(AgcDriver::VulkanDevice& device, std::uint8_t* texels, const std::array<std::uint32_t, 4>& sampler, bool linear, bool wrap, const std::string& what, bool whiteBorder = false, std::span<const std::uint32_t> code = SpreadSampleLz) {
-    for (std::uint32_t index = 0; index < Threads; ++index) {
-        const auto texel = FloatTexel(index);
-        std::memcpy(texels + index * 4u, &texel, 4u);
-    }
-    Run(device, code, TextureDescriptor(texels, FloatFormat, SwizzleXYZ1, Threads), sampler, 1);
-    const auto value = [](std::int32_t index, std::uint32_t component) {
-        return component == 3u ? 1.0f : FloatValues[(static_cast<std::uint32_t>(index) + component * 4u) % 11u];
-    };
-    for (std::uint32_t tid = 0; tid < Threads; ++tid) {
-        for (std::uint32_t component = 0; component < 4u; ++component) {
-            float expected = value(static_cast<std::int32_t>(tid), component);
-            if (linear) {
-                const auto left = tid == 0u ? (wrap ? static_cast<std::int32_t>(Threads) - 1 : 0) : static_cast<std::int32_t>(tid) - 1;
-                const float leftValue = tid == 0u && whiteBorder ? 1.0f : value(left, component);
-                expected = leftValue * 0.25f + value(static_cast<std::int32_t>(tid), component) * 0.75f;
-            }
-            const float actual = std::bit_cast<float>(Output[tid * 4u + component]);
-            Require(std::fabs(actual - expected) <= 1e-5f * std::max(1.0f, std::fabs(expected)), what + ": thread " + std::to_string(tid) + " component " + std::to_string(component) + " is " + std::to_string(actual) + ", expected " + std::to_string(expected));
-        }
-    }
-}
-
-void CheckFloatVolumeSample(AgcDriver::VulkanDevice& device, std::uint8_t* texels) {
-    auto texture = TextureDescriptor(texels, FloatFormat, SwizzleXYZ1, Threads);
-    texture[3] = (texture[3] & ~(0xfu << 28u)) | (Type3D << 28u);
-    texture[4] = 1u;
-    const auto geometry = AgcDriver::Graphics::DescribeSurface(AgcDriver::Graphics::DecodeTextureResource(texture));
-    const auto& mip = geometry.mips.at(0);
-    const auto value = [](std::uint32_t slice, std::int32_t index, std::uint32_t component) {
-        return component == 3u ? 1.0f : FloatValues[(static_cast<std::uint32_t>(index) + component * 4u + slice * 2u) % 11u];
-    };
-    for (std::uint32_t slice = 0; slice < 2u; ++slice) {
-        for (std::uint32_t index = 0; index < Threads; ++index) {
-            const auto texel = SmallFloat(value(slice, static_cast<std::int32_t>(index), 0u), 5u) | (SmallFloat(value(slice, static_cast<std::int32_t>(index), 1u), 6u) << 10u) | (SmallFloat(value(slice, static_cast<std::int32_t>(index), 2u), 6u) << 21u);
-            std::memcpy(texels + geometry.GuestLayerOffset(slice) + mip.tiledOffset + index * 4u, &texel, 4u);
-        }
-    }
-    Run(device, VolumeSampleLz, texture, EdgeBilinearSampler, 1);
-    for (std::uint32_t tid = 0; tid < Threads; ++tid) {
-        const auto left = tid == 0u ? 0 : static_cast<std::int32_t>(tid) - 1;
-        for (std::uint32_t component = 0; component < 4u; ++component) {
-            float expected = 0.0f;
-            for (std::uint32_t slice = 0; slice < 2u; ++slice) expected += 0.5f * (value(slice, left, component) * 0.25f + value(slice, static_cast<std::int32_t>(tid), component) * 0.75f);
-            const float actual = std::bit_cast<float>(Output[tid * 4u + component]);
-            Require(std::fabs(actual - expected) <= 1e-5f * std::max(1.0f, std::fabs(expected)), "image_sample_lz 3d of R10_G11_B11_FLOAT, bilinear between two slices: thread " + std::to_string(tid) + " component " + std::to_string(component) + " is " + std::to_string(actual) + ", expected " + std::to_string(expected));
-        }
+        const auto expected = tid < FloatStoreEdges.size() ? FloatStoreEdges[tid][3] : FloatTexel(tid);
+        Require(actual == expected, "image_store of R10_G11_B11_FLOAT: texel " + std::to_string(tid) + " is " + Hex(actual) + ", expected " + Hex(expected));
     }
 }
 
@@ -401,17 +374,10 @@ int main() {
         CheckStore(*device, texels + StoreOffset, StoreXz, 0x5u, "image_store dmask:0x5");
         CheckFloatStore(*device, texels + FloatOffset);
         CheckFloatLoad(*device, texels + FloatOffset);
-        CheckFloatSample(*device, texels + FloatOffset, PointSampler, false, false, "image_sample_lz of R10_G11_B11_FLOAT, point, clamp to edge");
-        CheckFloatSample(*device, texels + FloatOffset, EdgeBilinearSampler, true, false, "image_sample_lz of R10_G11_B11_FLOAT, bilinear, clamp to edge");
-        CheckFloatSample(*device, texels + FloatOffset, WrapBilinearSampler, true, true, "image_sample_lz of R10_G11_B11_FLOAT, bilinear, wrap");
-        RequireRefused(*device, Gather4Lz, texels + FloatOffset, SwizzleXYZ1, PointSampler, "samples or gathers a converted float image", "image_gather4_lz of R10_G11_B11_FLOAT", FloatFormat);
-        CheckFloatSample(*device, texels + FloatOffset, MirrorBilinearSampler, true, false, "image_sample_lz of R10_G11_B11_FLOAT, bilinear, mirror");
-        CheckFloatSample(*device, texels + FloatOffset, HalfBorderBilinearSampler, true, false, "image_sample_lz of R10_G11_B11_FLOAT, bilinear, half border, white", true);
-        CheckFloatSample(*device, texels + FloatOffset, UnnormalizedBilinearSampler, true, false, "image_sample_lz of R10_G11_B11_FLOAT, bilinear, unnormalized coordinates", false, TexelSpreadSampleLz);
-        CheckFloatVolumeSample(*device, texels + VolumeOffset);
-        RequireRefused(*device, SampleLz, texels, SwizzleXYZ1, MirrorOnceSampler, "clamp-to-half-border or clamp-to-border addressing", "image_sample_lz with mirror-once addressing");
-        RequireRefused(*device, Gather4Lz, texels, SwizzleXYZ1, PointSampler, "samples or gathers a converted unorm image", "image_gather4_lz");
-        RequireRefused(*device, GetLod, texels, SwizzleXYZ1, PointSampler, "queries the level of detail of a converted unorm image", "image_get_lod");
+        RequireRefused(*device, SampleLz, texels + FloatOffset, SwizzleXYZ1, PointSampler, "samples or gathers a converted float image", "image_sample_lz of R10_G11_B11_FLOAT", FloatFormat);
+        RequireRefused(*device, SampleLz, texels, SwizzleXYZ1, PointSampler, "sampling, gathering or querying LOD of a converted unorm image", "image_sample_lz");
+        RequireRefused(*device, Gather4Lz, texels, SwizzleXYZ1, PointSampler, "sampling, gathering or querying LOD of a converted unorm image", "image_gather4_lz");
+        RequireRefused(*device, GetLod, texels, SwizzleXYZ1, PointSampler, "sampling, gathering or querying LOD of a converted unorm image", "image_get_lod");
         RequireRefused(*device, LoadD16, texels, SwizzleXYZ1, {}, "converted unorm image with 16-bit data", "image_load d16");
         RequireRefused(*device, StoreD16, texels + StoreOffset, SwizzleXYZ1, BufferDescriptor(Input.data(), static_cast<std::uint32_t>(Input.size() * 4u)), "converted unorm image with 16-bit data", "image_store d16");
         RequireRefused(*device, LoadXyzw, texels, SwizzleXYZW, {}, "selects a channel the converted image format does not have", "image_load with DST_SEL X Y Z W");

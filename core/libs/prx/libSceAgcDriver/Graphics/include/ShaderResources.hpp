@@ -18,6 +18,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace AgcDriver { class VulkanDevice; }
+
 namespace AgcDriver::Graphics {
 
 class Recorder;
@@ -65,9 +67,6 @@ public:
         VkDescriptorSet set = VK_NULL_HANDLE;
         VkDescriptorPool pool = VK_NULL_HANDLE;
     };
-    // A set of `layout` needing `sizes` descriptors from the pool chain, opening a pool when no pool
-    // has room; a null set when the needs exceed what one chain pool holds (the caller then makes a
-    // dedicated pool, as before).
     SetAllocation Allocate(VkDescriptorSetLayout layout, std::span<const VkDescriptorPoolSize> sizes);
     void Free(const SetAllocation& allocation) noexcept;
     SetAllocation AllocateRewritten(VkDescriptorSetLayout layout, std::span<const VkDescriptorPoolSize> sizes);
@@ -78,6 +77,7 @@ public:
         std::uint64_t layoutMisses = 0;
         std::uint64_t sets = 0;
         std::uint64_t pools = 0;
+        std::uint64_t dedicatedPools = 0;
     };
     Stats Counters() const;
 
@@ -90,6 +90,7 @@ private:
     std::map<std::vector<std::uint32_t>, VkDescriptorSetLayout> layouts;
     std::vector<VkDescriptorPool> pools;
     std::unordered_map<VkDescriptorSetLayout, std::vector<SetAllocation>> recycled;
+    std::vector<VkDescriptorPool> dedicated;
     Stats stats;
 };
 
@@ -240,6 +241,8 @@ public:
     std::vector<std::pair<std::uint64_t, std::uint64_t>> PresyncSurfaces() const;
 
 private:
+    friend class AgcDriver::VulkanDevice;
+    bool refreshData(VkCommandBuffer commands, const CompiledShader& shader, Recorder* recorder);
     struct DescribedRange {
         const char* kind;
         std::uint64_t address;
@@ -408,7 +411,6 @@ private:
     // Whether the layout is this object's own (no cache) and destroyed with it.
     bool ownsLayout = false;
     VkDescriptorSet _set = VK_NULL_HANDLE;
-    // Dedicated pool of this object's set (no cache, or a set too large for a cache pool).
     VkDescriptorPool pool = VK_NULL_HANDLE;
     // The cache pool the set was allocated from, freed back to it on release.
     VkDescriptorPool cachePool = VK_NULL_HANDLE;
@@ -427,6 +429,7 @@ private:
     std::vector<bool> storageAtomic;
     std::vector<bool> storageAtomic64;
     std::vector<std::shared_ptr<Sampler>> samplers;
+    std::shared_ptr<Sampler> paddingSampler;
     bool reusable = false;
     std::vector<DirectRegion> directRegions;
     std::vector<ValidatedSurface> validatedTextures;
@@ -463,6 +466,7 @@ private:
     // still to look up (index into `bindings`; the DescriptorBinding lives in the compiled shader),
     // the descriptor counts the set was sized for, and the compute stage of a deferred build.
     std::vector<Binding> bindings;
+    std::vector<std::uint32_t> refreshResourceKey;
     struct DeferredImages {
         const ShaderRecompiler::DescriptorBinding* binding;
         std::size_t index;

@@ -199,7 +199,7 @@ void CollectVertexInputs(const IrProgram& program, const ShaderVertexInputInfo* 
             if (inst->Opcode() == IrOpcode::GetAttribute) {
                 const auto attribute = inst->Argument(0)->Resolve()->ImmediateU32();
                 const auto channel = inst->Argument(1)->Resolve()->ImmediateU32();
-                usedComponents[attribute] = std::max(usedComponents[attribute], channel + 1u);
+                usedComponents[attribute] = std::max(usedComponents[attribute], inst->Flags<std::uint32_t>() == 1u ? 4u : channel + 1u);
             }
         }
     }

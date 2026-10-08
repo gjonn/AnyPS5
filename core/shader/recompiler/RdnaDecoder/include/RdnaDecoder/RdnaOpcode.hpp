@@ -932,6 +932,7 @@ enum class RdnaOpcode : std::uint16_t {
     DsXorRtnB64,
     DsMskorRtnB64,
     DsWrxchgRtnB64,
+    DsCondxchg32RtnB64,
     DsCmpstRtnB64,
     DsCmpstRtnF64,
     DsMinRtnF64,
@@ -1041,6 +1042,17 @@ enum class RdnaOpcode : std::uint16_t {
     Exp,
     VMulHiI32I24,
     VMulHiU32U24,
+    SSethalt,
+    SSendmsghalt,
+    SCodeEnd,
+    SRfeB64,
+    DsGwsInit,
+    DsGwsSemaV,
+    DsGwsSemaBr,
+    DsGwsSemaP,
+    DsGwsSemaReleaseAll,
+    DsGwsBarrier,
+    DsOrderedCount,
     Count
 };
 

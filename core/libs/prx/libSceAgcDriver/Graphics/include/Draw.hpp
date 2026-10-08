@@ -33,7 +33,7 @@ struct DrawInputMemoCounts {
 };
 DrawInputMemoCounts DrawInputMemoCounters();
 
-std::array<std::uint32_t, 4> MeshIndexBufferDescriptor(const Pm4::DrawParameters& draw, std::uint64_t unreadAddress);
+std::array<std::uint32_t, 4> MeshIndexBufferDescriptor(const Pm4::DrawParameters& draw);
 
 struct MeshArguments {
     std::uint32_t groups;

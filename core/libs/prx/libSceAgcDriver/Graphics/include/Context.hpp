@@ -126,6 +126,7 @@ struct Context {
     bool depthBiasClamp = false;
     bool samplerFilterMinmax = false;
     bool nullDescriptor = false;
+    bool conservativeRasterization = false;
     VkBuffer emptyBuffer = VK_NULL_HANDLE;
     // The device's list of recorded dispatches whose copied written buffers await a CPU write-back
     // (VulkanDevice's State::copiedWriters; the draw counterpart is DrawCopiedWriters): an indirect
@@ -140,6 +141,7 @@ struct Context {
     bool geometryShader = false;
     bool sampleRateShading = false;
     bool viewportIndexLayer = false;
+    bool nullDescriptors = false;
     bool primitiveListRestart = false;
     bool imageViewMinLod = false;
     bool pipelineExecutableInfo = false;

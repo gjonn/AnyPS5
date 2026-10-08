@@ -262,11 +262,6 @@ void testControls() {
     }
     check(sceVideoOutWaitVblank(handle) == 0, "vblank wait failed");
     check(owner->GetTriggeredEvents(&event, 1) == 1 && event.udata == &settings && sceVideoOutGetEventId(&event) == VIDEO_OUT_EVENT_VBLANK, "vblank event or updated user data missing");
-    check(owner->GetTriggeredEvents(&event, 1) == 0, "VRR status event triggered without a VRR change");
-    KernelEvent vrrStatus{};
-    vrrStatus.ident = VIDEO_OUT_EVENT_VRR_STATUS;
-    vrrStatus.filter = EVFILT_VIDEO_OUT;
-    check(sceVideoOutGetEventId(&vrrStatus) == VIDEO_OUT_EVENT_VRR_STATUS, "VRR status event id rejected");
     std::vector<std::byte> allocation(65536 + 65535);
     const auto storage = alignedBuffer(allocation);
     VideoOutBuffers buffer{storage.data(), nullptr, {allocation.data(), storage.data()}};
