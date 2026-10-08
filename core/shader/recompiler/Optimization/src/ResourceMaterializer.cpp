@@ -681,6 +681,17 @@ void buildResourceSpecialization(const IrResourcePlan& plan, ResourceSnapshot& s
         result.images.push_back(entry);
     }
 
+    static_assert(ShaderInfo::MaxSamplers <= 32u, "ResourceSpecialization::foldTexelOffsets has one bit per sampler");
+    for (const auto& memory : plan.memoryInfo) {
+        if (memory.kind != ResourceKind::Image || (memory.imageSampleFlags & RdnaImageSampleFlagOffset) == 0u || memory.sampler >= snapshot.samplers.size()) {
+            continue;
+        }
+        const auto& sampler = snapshot.samplers[memory.sampler];
+        if (sampler.dwordCount != 0u && ((sampler.dwords[0] >> 15u) & 1u) != 0u) {
+            result.foldTexelOffsets |= 1u << memory.sampler;
+        }
+    }
+
     // A table root is followed by its slots 1..C-1 as extra images of the root's shape; the
     // (key, slot) mapping the SPIR-V selector searches is appended to the flattened SRT in a
     // block of fixed size, so the offsets (part of the specialization) never depend on the keys.
@@ -811,8 +822,9 @@ void ResourceMaterializer::Apply(IrProgram& program, const ResourceSpecializatio
         }
     }
     auto samplers = resources.info.samplers;
-    for (std::uint32_t index = 0; index < samplers.size() && index < specialization.unnormalizedSamplers.size(); index++) {
-        samplers[index].unnormalized = specialization.unnormalizedSamplers[index] != 0u;
+    for (std::uint32_t index = 0; index < samplers.size(); index++) {
+        if (index < specialization.unnormalizedSamplers.size()) samplers[index].unnormalized = specialization.unnormalizedSamplers[index] != 0u;
+        samplers[index].foldTexelOffsets = ((specialization.foldTexelOffsets >> index) & 1u) != 0u;
     }
     auto sampledPairs = resources.info.sampledPairs;
     samplers.reserve(samplerCount);
@@ -1111,7 +1123,7 @@ bool ResourceSpecialization::Image::operator==(const Image& other) const {
 }
 
 bool ResourceSpecialization::operator==(const ResourceSpecialization& other) const {
-    return buffers == other.buffers && images == other.images && unnormalizedSamplers == other.unnormalizedSamplers;
+    return buffers == other.buffers && images == other.images && unnormalizedSamplers == other.unnormalizedSamplers && foldTexelOffsets == other.foldTexelOffsets;
 }
 
 }

@@ -78,7 +78,7 @@ static_assert(sizeof(StageOutput) == 48, "StageOutput changed: update the info e
 static_assert(sizeof(IrBindingLayout) == 64, "IrBindingLayout changed: update the layout encoder");
 static_assert(sizeof(IrDescriptorBinding) == 32, "IrDescriptorBinding changed: update the layout encoder");
 static_assert(sizeof(BindingAllocationResult) == 120, "BindingAllocationResult changed: update the allocation encoder");
-static_assert(sizeof(ResourceSpecialization) == 72, "ResourceSpecialization changed: update BuildKey");
+static_assert(sizeof(ResourceSpecialization) == 80, "ResourceSpecialization changed: update BuildKey");
 static_assert(sizeof(ResourceSpecialization::Buffer) == 16, "ResourceSpecialization::Buffer changed: update BuildKey");
 static_assert(sizeof(ResourceSpecialization::Image) == 48, "ResourceSpecialization::Image changed: update BuildKey");
 static_assert(sizeof(BindingLayout) == 16, "BindingLayout changed: update BuildKey");
@@ -433,6 +433,7 @@ void encodeInfo(Writer& writer, const CompiledShaderInfo& compiled) {
         out.Value(sampler.depthCompare);
         out.Value(sampler.unnormalized);
         out.Value(sampler.uses);
+        out.Value(sampler.foldTexelOffsets);
     });
     writer.List(info.sampledPairs, [](Writer& out, const SampledResourcePair& pair) {
         out.Value(pair.image);
@@ -522,13 +523,14 @@ void decodeInfo(Reader& reader, CompiledShaderInfo& compiled) {
         in.Value(image.indirectSearchIterations);
         in.Values(image.indirectResources);
     });
-    reader.List(info.samplers, 11, [](Reader& in, SamplerResource& sampler) {
+    reader.List(info.samplers, 12, [](Reader& in, SamplerResource& sampler) {
         in.Value(sampler.source);
         in.Value(sampler.firstUsePc);
         in.Value(sampler.forcePointFiltering);
         in.Value(sampler.depthCompare);
         in.Value(sampler.unnormalized);
         in.Value(sampler.uses);
+        in.Value(sampler.foldTexelOffsets);
     });
     reader.List(info.sampledPairs, 12, [](Reader& in, SampledResourcePair& pair) {
         in.Value(pair.image);
@@ -840,6 +842,7 @@ void BuildKey(const RecompileRequest& request, std::uint32_t hostSubgroupSize, c
         out.Value(image.srgbDecode);
     });
     writer.Values(std::span<const std::uint32_t>(specialization.unnormalizedSamplers));
+    writer.Value(specialization.foldTexelOffsets);
     writer.Values(std::span<const std::uint32_t>(specialization.boundDescriptors));
     const auto& switches = switchKey();
     key.insert(key.end(), switches.begin(), switches.end());

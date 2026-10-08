@@ -144,6 +144,7 @@ struct SamplerResource {
     bool depthCompare = false;
     bool unnormalized = false;
     std::uint8_t uses = 0;
+    bool foldTexelOffsets = false;
 
     bool operator==(const SamplerResource& other) const = default;
 };
