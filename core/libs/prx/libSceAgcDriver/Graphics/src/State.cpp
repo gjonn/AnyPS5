@@ -296,7 +296,7 @@ DecodedColorFormat DecodeColorFormat(std::uint32_t format, std::uint32_t number,
     };
     const bool alternate = swap == 1;
     const auto single = [&](VkFormat vkFormat, std::uint32_t bytes) { return DecodedColorFormat{vkFormat, bytes, static_cast<std::uint8_t>((0xe4u & ~3u) | swap)}; };
-    if (swap > 1 && format != 1 && format != 2 && format != 4 && format != 10) return fail();
+    if (swap > 1 && format != 1 && format != 2 && format != 4 && format != 10 && format != 12) return fail();
     switch (format) {
         case 1:
             if (number == unorm) return single(VK_FORMAT_R8_UNORM, 1);
@@ -346,13 +346,15 @@ DecodedColorFormat DecodeColorFormat(std::uint32_t format, std::uint32_t number,
             if (number == floating) return {VK_FORMAT_R32G32_SFLOAT, 8};
             if (number == uint) return {VK_FORMAT_R32G32_UINT, 8};
             return fail();
-        case 12:
-            if (swap != 0) return fail();
-            if (number == floating) return {VK_FORMAT_R16G16B16A16_SFLOAT, 8};
-            if (number == unorm) return {VK_FORMAT_R16G16B16A16_UNORM, 8};
-            if (number == snorm) return {VK_FORMAT_R16G16B16A16_SNORM, 8};
-            if (number == uint) return {VK_FORMAT_R16G16B16A16_UINT, 8};
+        case 12: {
+            if (swap == 1) return fail();
+            const auto reversed = static_cast<std::uint8_t>(swap == 2 ? 0x1bu : swap == 3 ? 0x93u : 0xe4u);
+            if (number == floating) return {VK_FORMAT_R16G16B16A16_SFLOAT, 8, reversed};
+            if (number == unorm) return {VK_FORMAT_R16G16B16A16_UNORM, 8, reversed};
+            if (number == snorm) return {VK_FORMAT_R16G16B16A16_SNORM, 8, reversed};
+            if (number == uint) return {VK_FORMAT_R16G16B16A16_UINT, 8, reversed};
             return fail();
+        }
         case 14:
             if (swap != 0) return fail();
             if (number == floating) return {VK_FORMAT_R32G32B32A32_SFLOAT, 16};

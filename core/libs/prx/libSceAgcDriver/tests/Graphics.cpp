@@ -517,7 +517,14 @@ void ReversedComponentOrderTests() {
         Require(AgcDriver::Graphics::ExportMappings(state)[0] == mapping && state.blends[0].colorWriteMask == 0xfu, "a reversed 8_8_8_8 target did not write all four channels through its export mapping");
         queue.context[0x1e0] = 0x40010001u;
         expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "reversed component order");
+        queue.context[0x1e0] = 0;
+        queue.context[0x31c] = (queue.context[0x31c] & ~((0x1fu << 2u) | (7u << 8u))) | (12u << 2u) | (7u << 8u);
+        const auto wide = AgcDriver::Graphics::DecodeState(queue);
+        Require(wide.colors.size() == 1 && wide.colors[0].format == VK_FORMAT_R16G16B16A16_SFLOAT && wide.colors[0].componentMapping == mapping && wide.blends[0].colorWriteMask == 0xfu, "a 16_16_16_16 float target with a reversed component order did not map exports onto RGBA16");
     }
+    auto queue = makeState();
+    queue.context[0x31c] = (queue.context[0x31c] & ~((0x1fu << 2u) | (7u << 8u) | (3u << 11u))) | (12u << 2u) | (7u << 8u) | (1u << 11u);
+    expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "component swap 1");
 }
 
 void CompactedExportTests() {
