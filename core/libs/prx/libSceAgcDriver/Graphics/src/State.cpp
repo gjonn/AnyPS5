@@ -693,7 +693,8 @@ std::uint32_t GuestFormatFor(VkFormat format, std::uint32_t elementBytes) {
 }
 
 GuestTextureResource SurfaceForTarget(const ColorTarget& color) {
-    Require(color.tileMode == ColorTileMode::RenderTarget || color.tileMode == ColorTileMode::Standard4KB, "only 4 KiB standard and 64 KiB tiled color targets are resident");
+    static const bool residentLinear = std::getenv("APS5_NO_RESIDENT_LINEAR_TARGETS") == nullptr;
+    Require(color.tileMode == ColorTileMode::RenderTarget || color.tileMode == ColorTileMode::Standard4KB || (residentLinear && color.tileMode == ColorTileMode::Linear), "only linear, 4 KiB standard and 64 KiB tiled color targets are resident");
     const bool chain = color.mipCount > 1;
     GuestTextureResource surface{};
     surface.baseAddress = chain ? color.surfaceAddress : color.address;
