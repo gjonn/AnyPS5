@@ -8,6 +8,7 @@
 
 extern "C" {
 int APS5_VABI scePadOpen_nid_postfix(int, int, int, const void*);
+int APS5_VABI scePadOpenExt(int, int, int, const void*);
 int APS5_VABI scePadClose_nid_postfix(int);
 int APS5_VABI scePadGetHandle(int, int, int);
 int APS5_VABI scePadSetVibrationTriggerEffectWeakWhileEmbeddedMicInUse(bool);
@@ -74,6 +75,11 @@ int main() {
     Require(scePadGetHandle(user, 0, 0) == noHandle);
     Require(scePadOpen_nid_postfix(user, 1, 0, nullptr) == PAD_ERROR_INVALID_ARG);
     Require(scePadOpen_nid_postfix(user, 0, 1, nullptr) == PAD_ERROR_INVALID_ARG);
+    Require(scePadGetHandle(user, 0, 0) == noHandle);
+    const unsigned char wheel[16]{0xb7, 0x0e, 0x04, 0x0e, 0x08, 0x6e, 0x01};
+    Require(scePadOpenExt(user, PAD_PORT_TYPE_SPECIAL, 0, wheel) == static_cast<int>(0x80920007));
+    Require(scePadOpenExt(user, PAD_PORT_TYPE_SPECIAL, 1, wheel) == PAD_ERROR_INVALID_ARG);
+    Require(scePadOpenExt(user, PAD_PORT_TYPE_SPECIAL, 0, nullptr) == PAD_ERROR_INVALID_ARG);
     Require(scePadGetHandle(user, 0, 0) == noHandle);
     const int handle = scePadOpen_nid_postfix(user, 0, 0, nullptr);
     Require(handle > 0);
