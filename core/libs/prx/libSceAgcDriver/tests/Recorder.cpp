@@ -708,6 +708,45 @@ void storeRunTests(const Device& device, Recorder& recorder) {
     HostImportFor(context, address, bytes);
 }
 
+void remappedImportTests(const Device& device) {
+    const auto& context = device.GetContext();
+    if (context.hostImportAlignment == 0) {
+        std::cout << "host imports unavailable: remapped imports not tested\n";
+        return;
+    }
+    constexpr std::size_t bytes = 65536;
+#ifdef _WIN32
+    void* block = VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#else
+    void* block = std::aligned_alloc(65536, bytes);
+#endif
+    Require(block != nullptr, "cannot allocate the remap test block");
+    const auto address = reinterpret_cast<std::uint64_t>(block);
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Add(block, bytes, true, true);
+    }
+    if (HostImportFor(context, address, bytes) == nullptr) {
+        std::cout << "host import of the remap test block refused: remapped imports not tested\n";
+        return;
+    }
+    const auto first = HostImportSerial(context, address, bytes, true);
+    Require(first != 0 && HostImportSerial(context, address, bytes, true) == first, "an unchanged range lost its import");
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Remove(block);
+        mutation.Add(block, bytes, true, true);
+    }
+    Require(HostImportFor(context, address, bytes) != nullptr, "the remapped range was not imported again");
+    const auto second = HostImportSerial(context, address, bytes, true);
+    Require(second != 0 && second != first, "the import of a range mapped again was kept");
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Remove(block);
+    }
+    HostImportFor(context, address, bytes);
+}
+
 void movedMetadataTests(const Device& device, Recorder& recorder) {
     const auto& base = device.GetContext();
     if (base.hostImportAlignment == 0) {
@@ -2781,6 +2820,7 @@ int main() {
         drawInputReuseTests(device, recorder);
         RunResidentPresentTests(device.GetContext());
         storeRunTests(device, recorder);
+        remappedImportTests(device);
         movedMetadataTests(device, recorder);
         viewPastLastMipTests(device, recorder);
         keysFillTests(device, recorder);

@@ -228,6 +228,23 @@ static int deleteSave(const SaveDataDelete* del) {
         return SAVE_DATA_ERROR_PARAMETER;
     }
     const std::string path = save_root() + "/" + dirName;
+    std::lock_guard lock(g_slots_mutex);
+    for (const auto& slot : g_slots) {
+        if (!slot.used) {
+            continue;
+        }
+        if (slot.real_path == path) {
+            return SAVE_DATA_ERROR_BUSY;
+        }
+        std::error_code ec;
+        const bool same_directory = std::filesystem::equivalent(slot.real_path, path, ec);
+        if (ec && ec != std::errc::no_such_file_or_directory) {
+            throw std::filesystem::filesystem_error("sceSaveDataDelete: failed to compare save paths", slot.real_path, path, ec);
+        }
+        if (same_directory) {
+            return SAVE_DATA_ERROR_BUSY;
+        }
+    }
     if (std::filesystem::is_directory(path)) {
         std::filesystem::remove_all(path);
     }
