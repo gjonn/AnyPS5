@@ -175,7 +175,7 @@ DecodedImage decodeImageDescriptor(const DescriptorValue& descriptor, const Imag
     decoded.conversionFormat = RemapTextureFormat(format) != format ? format : IrBufferFormat::Invalid;
     if (format == IrBufferFormat::Format11_11_10UNorm || format == IrBufferFormat::Format10_11_11Float) {
         const bool floating = format == IrBufferFormat::Format10_11_11Float;
-        if (!base.srgbDecodeCompatible) throw std::runtime_error(floating ? "samples or gathers a converted float image, or queries its LOD, which is not implemented" : "sampling, gathering or querying LOD of a converted unorm image is not implemented");
+        if (!base.srgbDecodeCompatible && (storage || base.indirectRoot != ImageResource::NoIndirectImage || base.depthCompare || base.packed)) throw std::runtime_error(floating ? "samples or gathers a converted float image, or queries its LOD, which is not implemented" : "sampling, gathering or querying LOD of a converted unorm image is not implemented");
         if (!base.depthBitsCompatible) throw std::runtime_error(floating ? "reads or writes a converted float image with 16-bit data, which is not implemented" : "reads or writes a converted unorm image with 16-bit data, which is not implemented");
         for (std::uint32_t component = 0; component < 4u; ++component) {
             if (((descriptorImageSwizzle(descriptor) >> (component * 3u)) & 7u) == 7u) throw std::runtime_error("selects a channel the converted image format does not have");
@@ -564,51 +564,35 @@ std::uint32_t emulatedCompareState(const ShaderInfo& info, const ResourceSnapsho
     return *samplerState | (reference << EmulatedCompare::ReferenceShift) | (singleLevel ? EmulatedCompare::SingleLevel : 0u) | (result << EmulatedCompare::ResultShift);
 }
 
-std::uint32_t emulatedFilterState(const IrResourcePlan& plan, const ResourceSnapshot& snapshot, std::uint32_t index, IrBufferFormat conversionFormat) {
-    if (conversionFormat != IrBufferFormat::Format11_11_10UNorm && conversionFormat != IrBufferFormat::Format10_11_11Float) return 0u;
-    std::optional<std::uint32_t> filterState;
-    for (const auto& pair : plan.info.sampledPairs) {
+std::uint32_t emulatedFilterState(const ShaderInfo& info, const ResourceSnapshot& snapshot, std::uint32_t index) {
+    for (const auto& pair : info.sampledPairs) {
         if (pair.image != index) continue;
-        if (pair.sampler >= snapshot.samplers.size() || snapshot.samplers[pair.sampler].dwordCount != 4u) throw std::runtime_error("filtering a converted image in the shader has no sampler descriptor");
+        if (pair.sampler >= snapshot.samplers.size() || snapshot.samplers[pair.sampler].dwordCount != 4u) continue;
         const auto& words = snapshot.samplers[pair.sampler].dwords;
-        const auto clampX = words[0] & 0x7u;
-        const auto clampY = (words[0] >> 3u) & 0x7u;
-        const bool unnormalized = ((words[0] >> 15u) & 0x1u) != 0u;
-        if (((words[0] >> 29u) & 0x3u) != 0u) throw std::runtime_error("filtering a converted image in the shader through a min or max reduction sampler is not implemented");
-        const auto magFilter = (words[2] >> 20u) & 0x3u;
-        const auto minFilter = (words[2] >> 22u) & 0x3u;
         const auto addressMode = [](std::uint32_t clamp) {
-            if (clamp == 0u) return EmulatedFilter::AddressWrap;
-            if (clamp == 1u) return EmulatedFilter::AddressMirror;
-            if (clamp == 2u) return EmulatedFilter::AddressEdge;
-            if (clamp == 4u) return EmulatedFilter::AddressHalfBorder;
-            if (clamp == 6u) return EmulatedFilter::AddressBorder;
-            throw std::runtime_error("filtering a converted image in the shader is implemented only with wrap, mirror, clamp-to-edge, clamp-to-half-border or clamp-to-border addressing");
+            switch (clamp) {
+                case 0u: return EmulatedFilter::AddressWrap;
+                case 1u: case 3u: return EmulatedFilter::AddressMirror;
+                case 4u: return EmulatedFilter::AddressHalfBorder;
+                case 6u: return EmulatedFilter::AddressBorder;
+                default: return EmulatedFilter::AddressEdge;
+            }
         };
-        const auto addressX = addressMode(clampX);
-        const auto addressY = addressMode(clampY);
-        const bool volume = rawImageType(snapshot.images[index]) == ImageType::Color3D;
-        const auto addressZ = volume ? addressMode((words[0] >> 6u) & 0x7u) : EmulatedFilter::AddressWrap;
-        if (magFilter != minFilter || magFilter > 1u) throw std::runtime_error("filtering a converted image in the shader is implemented only with equal point or bilinear minification and magnification filters");
-        const auto borderType = (words[3] >> 30u) & 0x3u;
+        const auto addressX = addressMode(words[0] & 0x7u);
+        const auto addressY = addressMode((words[0] >> 3u) & 0x7u);
+        const auto addressZ = addressMode((words[0] >> 6u) & 0x7u);
+        const bool unnormalized = ((words[0] >> 15u) & 0x1u) != 0u;
+        const auto magFilter = (words[2] >> 20u) & 0x3u;
+        const auto mipFilter = (words[2] >> 24u) & 0x3u;
+        const auto mip = unnormalized ? EmulatedFilter::MipBase : mipFilter == 1u ? EmulatedFilter::MipPoint : mipFilter == 2u ? EmulatedFilter::MipLinear : EmulatedFilter::MipBase;
         const auto borderMode = [](std::uint32_t mode) { return mode == EmulatedFilter::AddressBorder || mode == EmulatedFilter::AddressHalfBorder; };
         const bool border = borderMode(addressX) || borderMode(addressY) || borderMode(addressZ);
-        if (border && borderType == 3u) throw std::runtime_error("filtering a converted image in the shader with a border color table is not implemented");
-        const auto mipFilter = (words[2] >> 24u) & 0x3u;
-        const auto mip = mipFilter == 1u ? EmulatedFilter::MipPoint : mipFilter == 2u ? EmulatedFilter::MipLinear : EmulatedFilter::MipBase;
+        const auto borderType = (words[3] >> 30u) & 0x3u;
         const auto& descriptor = snapshot.images[index];
-        const auto baseLevel = (descriptor.dwords[3] >> 12u) & 0xfu;
-        const auto lastLevel = (descriptor.dwords[3] >> 16u) & 0xfu;
-        const bool lodClamped = (words[2] & 0x3fffu) != 0u || (words[1] & 0xfffu) != 0u || ((words[1] >> 12u) & 0xfffu) < (lastLevel - baseLevel) * 256u || ((descriptor.dwords[1] >> 8u) & 0xfffu) > baseLevel * 256u;
-        if (lastLevel > baseLevel && mip != EmulatedFilter::MipBase && lodClamped) throw std::runtime_error("filtering a converted image in the shader across mip levels with a LOD bias or clamp is not implemented");
-        const auto state = EmulatedFilter::Enabled | (magFilter == 1u ? EmulatedFilter::Linear : 0u) | (addressX << EmulatedFilter::ClampXShift) | (addressY << EmulatedFilter::ClampYShift) | (mip << EmulatedFilter::MipShift) | ((border ? borderType : 0u) << EmulatedFilter::BorderShift) | (unnormalized ? EmulatedFilter::Unnormalized : 0u) | (addressZ << EmulatedFilter::ClampZShift);
-        if (filterState.has_value() && *filterState != state) throw std::runtime_error("filtering a converted image in the shader through samplers that disagree is not implemented");
-        filterState = state;
+        const bool singleLevel = ((descriptor.dwords[3] >> 12u) & 0xfu) == ((descriptor.dwords[3] >> 16u) & 0xfu);
+        return EmulatedFilter::Enabled | (magFilter != 0u ? EmulatedFilter::Linear : 0u) | (addressX << EmulatedFilter::ClampXShift) | (addressY << EmulatedFilter::ClampYShift) | (mip << EmulatedFilter::MipShift) | ((border && borderType < 3u ? borderType : 0u) << EmulatedFilter::BorderShift) | (unnormalized ? EmulatedFilter::Unnormalized : 0u) | (addressZ << EmulatedFilter::ClampZShift) | (singleLevel ? EmulatedFilter::SingleLevel : 0u);
     }
-    if (!filterState.has_value()) return 0u;
-    const auto& descriptor = snapshot.images[index];
-    const bool singleLevel = ((descriptor.dwords[3] >> 12u) & 0xfu) == ((descriptor.dwords[3] >> 16u) & 0xfu);
-    return *filterState | (singleLevel ? EmulatedFilter::SingleLevel : 0u);
+    return EmulatedFilter::Enabled | (EmulatedFilter::AddressEdge << EmulatedFilter::ClampXShift) | (EmulatedFilter::AddressEdge << EmulatedFilter::ClampYShift) | (EmulatedFilter::AddressEdge << EmulatedFilter::ClampZShift);
 }
 
 void materializeTables(const IrResourcePlan& plan, ResourceSnapshot& snapshot, const std::vector<TableResolution>& tables) {
@@ -717,6 +701,21 @@ std::vector<ImageResource> ResourceMaterializer::RuntimeImageModes(const ImageRe
             }
         }
     }
+    if (!storage && !image.srgbDecodeCompatible && image.depthBitsCompatible && !image.depthCompare && !image.packed && !image.atomic && image.indirectRoot == ImageResource::NoIndirectImage) {
+        for (const auto conversion : {IrBufferFormat::Format11_11_10UNorm, IrBufferFormat::Format10_11_11Float}) {
+            const auto first = modes.size();
+            append(IrTextureNumericClass::Uint, conversion, IrBufferFormat::Invalid, false, false);
+            for (auto index = first; index < modes.size();) {
+                const auto dimension = modes[index].dimension;
+                if (dimension != RdnaImageDimension::Dim2D && dimension != RdnaImageDimension::Dim2DArray && dimension != RdnaImageDimension::Dim3D) {
+                    modes.erase(modes.begin() + static_cast<std::ptrdiff_t>(index));
+                    continue;
+                }
+                modes[index].emulatedFilter = EmulatedFilter::Enabled;
+                ++index;
+            }
+        }
+    }
     if (storage && image.depthBitsCompatible && !image.packed && !image.atomic64 && ((image.written && !image.read) || image.atomic)) {
         constexpr std::array formats{IrBufferFormat::Format32SInt, IrBufferFormat::Format32_32SInt, IrBufferFormat::Format32_32_32_32SInt, IrBufferFormat::Format16SInt, IrBufferFormat::Format8_8SInt, IrBufferFormat::Format16_16SInt, IrBufferFormat::Format8_8_8_8SInt, IrBufferFormat::Format16_16_16_16SInt};
         for (const auto format : formats) {
@@ -784,6 +783,10 @@ std::uint32_t ResourceMaterializer::RuntimeImageMode(const ImageResource& image,
 
 std::uint32_t ResourceMaterializer::EmulatedCompareState(const ShaderInfo& info, const ResourceSnapshot& snapshot, std::uint32_t index) {
     return emulatedCompareState(info, snapshot, index);
+}
+
+std::uint32_t ResourceMaterializer::EmulatedFilterState(const ShaderInfo& info, const ResourceSnapshot& snapshot, std::uint32_t index) {
+    return emulatedFilterState(info, snapshot, index);
 }
 
 void ResourceMaterializer::ApplyStaticInterface(IrProgram& program, bool nativeSampleOffsets) const {

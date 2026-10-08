@@ -1,3 +1,9 @@
+#include <cstdio>
+#include <algorithm>
+#include <string>
+#include <mutex>
+#include <map>
+#include <chrono>
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Diagnostics.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Draw/DrawPipeline.hpp"
@@ -12,6 +18,34 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+
+
+namespace {
+
+void NoteEopDelay(std::uint32_t queue, std::chrono::steady_clock::time_point start) {
+    static std::mutex mutex;
+    static std::map<std::uint32_t, std::pair<std::uint64_t, double>> sums;
+    static std::map<std::uint32_t, double> maxima;
+    static auto last = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    const auto ms = std::chrono::duration<double, std::milli>(now - start).count();
+    static const bool traceGpu = std::getenv("APS5_TRACE_GPU") != nullptr;
+    if (traceGpu) std::fprintf(stderr, "[gpu] %.1f eop queue=0x%x after %.2f ms\n", AgcDriver::DriverDetail::TraceMs(), queue, ms);
+    std::lock_guard lock(mutex);
+    auto& sum = sums[queue];
+    ++sum.first;
+    sum.second += ms;
+    maxima[queue] = std::max(maxima[queue], ms);
+    if (now - last < std::chrono::seconds(10)) return;
+    last = now;
+    std::string text = "[eop] deferred interrupts (10 s):";
+    for (const auto& [id, value] : sums) text += " queue 0x" + [&] { char b[16]; std::snprintf(b, sizeof b, "%x", id); return std::string(b); }() + " " + std::to_string(value.first) + " avg " + std::to_string(value.second / static_cast<double>(value.first)).substr(0, 6) + " ms max " + std::to_string(maxima[id]).substr(0, 6) + " ms;";
+    std::fprintf(stderr, "%s\n", text.c_str());
+    sums.clear();
+    maxima.clear();
+}
+
+}
 
 namespace AgcDriver::DriverDetail {
 
@@ -52,7 +86,7 @@ bool Driver::preparePacketMemory(const Submission& submission, QueueState& queue
             }
             if (reason == 0 || reason == 5 || reason == 6) {
                 const auto queueId = submission.queue;
-                interruptDeferred = localDevice->AfterRecordedWork([queueId] { AgcDriverDeliverEopInterrupt(queueId); }, submission.queue == 0);
+                interruptDeferred = localDevice->AfterRecordedWork([queueId, start = std::chrono::steady_clock::now()] { NoteEopDelay(queueId, start); AgcDriverDeliverEopInterrupt(queueId); }, submission.queue == 0);
                 if (interruptDeferred && workOpen) localDevice->SubmitRecorded(submission.queue == 0);
                 wroteOnGpu = true;
             } else if (reason == 1) {
@@ -357,7 +391,7 @@ void Driver::commitLabel(std::uint32_t queue, std::uint64_t address, std::span<c
     if (endOfPipeInterrupt) {
         bool deferred = false;
         if (localDevice != nullptr && (reason == 0 || reason == 5 || reason == 6)) {
-            deferred = localDevice->AfterRecordedWork([queue] { AgcDriverDeliverEopInterrupt(queue); }, queue == 0);
+            deferred = localDevice->AfterRecordedWork([queue, start = std::chrono::steady_clock::now()] { NoteEopDelay(queue, start); AgcDriverDeliverEopInterrupt(queue); }, queue == 0);
             if (deferred && workOpen) localDevice->SubmitRecorded(queue == 0);
         }
         if (!deferred) AgcDriverDeliverEopInterrupt(queue);

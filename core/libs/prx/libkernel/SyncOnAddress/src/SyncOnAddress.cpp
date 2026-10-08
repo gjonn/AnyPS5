@@ -1,3 +1,6 @@
+#include <algorithm>
+#include <cstdlib>
+#include <cstdio>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -20,7 +23,25 @@ constexpr int SYNC_ON_ADDRESS_OK = 0;
 struct AddressWaiter {
     TimedWait::Condition condition;
     bool woken = false;
+    std::chrono::steady_clock::time_point wokenAt;
 };
+
+void NoteWakeLatency(std::chrono::steady_clock::time_point wokenAt) {
+    static const bool enabled = std::getenv("APS5_TRACE_WAKE") != nullptr;
+    if (!enabled) return;
+    static std::mutex mutex;
+    static std::uint64_t count = 0, over1 = 0, over5 = 0;
+    static double total = 0, longest = 0;
+    static auto last = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(now - wokenAt).count();
+    std::lock_guard lock(mutex);
+    ++count; total += ms; longest = std::max(longest, ms); over1 += ms > 1.0; over5 += ms > 5.0;
+    if (now - last < std::chrono::seconds(10)) return;
+    last = now;
+    std::fprintf(stderr, "[wake] sync-on-address wake-to-run (10 s): %llu wakes, avg %.3f ms, max %.1f ms, %llu over 1 ms, %llu over 5 ms\n", static_cast<unsigned long long>(count), total / static_cast<double>(count), longest, static_cast<unsigned long long>(over1), static_cast<unsigned long long>(over5));
+    count = over1 = over5 = 0; total = longest = 0;
+}
 
 std::mutex g_waitersLock;
 std::unordered_map<std::uintptr_t, std::list<AddressWaiter*>> g_waiters;
@@ -51,6 +72,7 @@ int WaitOnAddress(TValue* address, TValue expected, const KernelUseconds* timeou
     const auto waited = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - waitStart);
 
     const bool woken = waiter.woken;
+    if (woken) NoteWakeLatency(waiter.wokenAt);
     if (!woken) {
         queue.erase(position);
         if (queue.empty()) {
@@ -122,6 +144,7 @@ int APS5_VABI sceKernelSyncOnAddressWake(void* address, std::int32_t count) {
         AddressWaiter* waiter = queue.front();
         queue.pop_front();
         waiter->woken = true;
+        waiter->wokenAt = std::chrono::steady_clock::now();
         waiter->condition.NotifyOne();
     }
     if (queue.empty()) {

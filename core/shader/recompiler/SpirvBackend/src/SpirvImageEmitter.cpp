@@ -877,6 +877,10 @@ void EmitQueryDimensionsOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& ac
 
 void EmitQueryLodOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access) {
     auto& state = ctx.state;
+    if ((access.image.emulatedFilter & EmulatedFilter::Enabled) != 0u) {
+        ctx.Define(access.inst, TableResult(ctx, access, ConstantU32CompositeZero(state, 4u)));
+        return;
+    }
     if (ImageConversionFormat(access.image).type == SpirvFormatComponentType::Unorm) {
         ctx.Fail(access.inst, "queries the level of detail of a converted unorm image, which is not implemented");
     }
@@ -1010,10 +1014,11 @@ SampleSetup MakeSampleSetup(SpirvValueEmitContext& ctx, const ImageEmitAccess& a
         ctx.Fail(access.inst, "uses depth comparison with a packed integer image");
     }
     const bool filtered = (access.image.emulatedFilter & EmulatedFilter::Enabled) != 0u && access.inst.Opcode() != IrOpcode::ImageGatherRaw;
-    if (!filtered && ImageConversionFormat(access.image).type == SpirvFormatComponentType::Unorm) {
+    const bool filterMode = (access.image.emulatedFilter & EmulatedFilter::Enabled) != 0u;
+    if (!filterMode && !filtered && ImageConversionFormat(access.image).type == SpirvFormatComponentType::Unorm) {
         ctx.Fail(access.inst, "samples or gathers a converted unorm image, which needs filtering in the shader and is not implemented");
     }
-    if (ImageConversionFormat(access.image).type == SpirvFormatComponentType::Float) {
+    if (!filterMode && ImageConversionFormat(access.image).type == SpirvFormatComponentType::Float) {
         ctx.Fail(access.inst, "samples or gathers a converted float image, which needs filtering in the shader and is not implemented");
     }
     const auto coord = CoordF32(ctx, access, layout.coord, dimensionInfo.coordinateComponents, AddressDimension(access).coordinateComponents);
@@ -1221,17 +1226,14 @@ void EmitEmulatedFilterSample(SpirvValueEmitContext& ctx, const ImageEmitAccess&
     auto& state = ctx.state;
     const auto& mem = access.mem;
     const auto& image = access.image;
-    const auto filter = image.emulatedFilter;
     if (access.slot != 0) ctx.Fail(access.inst, "filters a converted image through a bindless image table, which is not implemented");
-    const bool unnormalized = (filter & EmulatedFilter::Unnormalized) != 0u;
-    const bool baseOnly = unnormalized || HasFlag(mem, RdnaImageSampleFlagLevelZero) || (filter & EmulatedFilter::SingleLevel) != 0u || EmulatedFilter::Mip(filter) == EmulatedFilter::MipBase;
-    if (!baseOnly && (!HasFlag(mem, RdnaImageSampleFlagLod) || setup.layout.clamp != NoImageComponent)) ctx.Fail(access.inst, "filters a converted image across mip levels without an explicit, unclamped LOD, which is not implemented");
     const bool arrayed = image.dimension == RdnaImageDimension::Dim2DArray;
     const bool volume = image.dimension == RdnaImageDimension::Dim3D;
     if (image.dimension != RdnaImageDimension::Dim2D && !arrayed && !volume) ctx.Fail(access.inst, "filters a converted image that is not a 2D, 2D array or 3D view, which is not implemented");
     const auto f32 = TypeF32(state);
     const auto i32 = TypeI32(state);
     const auto u32 = TypeU32(state);
+    const auto boolean = TypeBool(state);
     const auto f32x4 = TypeF32Vector(state, 4);
     const auto ext = [&](std::uint32_t type, std::uint32_t op, std::initializer_list<std::uint32_t> args) {
         const auto value = state.module.AllocateId();
@@ -1245,6 +1247,19 @@ void EmitEmulatedFilterSample(SpirvValueEmitContext& ctx, const ImageEmitAccess&
         state.module.AddFunction(spv::OpCompositeExtract, type, value, composite, index);
         return value;
     };
+    const auto filter = state.module.SpecializationConstant(u32, PipelineSpecialization::FilterBase + mem.resource, EmulatedFilter::Enabled);
+    const auto field = [&](std::uint32_t shift, std::uint32_t mask) { return Binary(state, spv::OpBitwiseAnd, u32, Binary(state, spv::OpShiftRightLogical, u32, filter, ConstantU32(state, shift)), ConstantU32(state, mask)); };
+    const auto equal = [&](std::uint32_t value, std::uint32_t literal) { return Binary(state, spv::OpIEqual, boolean, value, ConstantU32(state, literal)); };
+    const auto flag = [&](std::uint32_t bit) { return Binary(state, spv::OpINotEqual, boolean, Binary(state, spv::OpBitwiseAnd, u32, filter, ConstantU32(state, bit)), ConstantU32(state, 0u)); };
+    const auto either = [&](std::uint32_t a, std::uint32_t b) { return Binary(state, spv::OpLogicalOr, boolean, a, b); };
+    const auto both = [&](std::uint32_t a, std::uint32_t b) { return Binary(state, spv::OpLogicalAnd, boolean, a, b); };
+    const auto unnormalized = flag(EmulatedFilter::Unnormalized);
+    const auto linear = flag(EmulatedFilter::Linear);
+    const auto modeX = field(EmulatedFilter::ClampXShift, 7u);
+    const auto modeY = field(EmulatedFilter::ClampYShift, 7u);
+    const auto modeZ = field(EmulatedFilter::ClampZShift, 7u);
+    const auto mipMode = field(EmulatedFilter::MipShift, 3u);
+    const auto borderKind = field(EmulatedFilter::BorderShift, 3u);
     const auto descriptor = LoadSampledImageDescriptor(state, mem.resource, access.slot);
     state.module.EmitCapability(spv::CapabilityImageQuery);
     const auto levelSize = [&](std::uint32_t level) {
@@ -1259,55 +1274,41 @@ void EmitEmulatedFilterSample(SpirvValueEmitContext& ctx, const ImageEmitAccess&
         layer = Unary(state, spv::OpBitcast, u32, ext(i32, GLSLstd450SClamp, {rounded, ConstantI32(state, 0), Binary(state, spv::OpISub, i32, layers, ConstantI32(state, 1))}));
     }
     const auto address = [&](std::uint32_t index, std::uint32_t extent, std::uint32_t mode) {
-        if (mode == EmulatedFilter::AddressWrap) return Binary(state, spv::OpSMod, i32, index, extent);
-        if (mode == EmulatedFilter::AddressMirror) {
-            const auto period = Binary(state, spv::OpIAdd, i32, extent, extent);
-            const auto folded = Binary(state, spv::OpSMod, i32, index, period);
-            const auto reflected = Binary(state, spv::OpISub, i32, Binary(state, spv::OpISub, i32, period, ConstantI32(state, 1)), folded);
-            return Select(state, i32, Binary(state, spv::OpSLessThan, TypeBool(state), folded, extent), folded, reflected);
-        }
-        return ext(i32, GLSLstd450SClamp, {index, ConstantI32(state, 0), Binary(state, spv::OpISub, i32, extent, ConstantI32(state, 1))});
+        const auto wrapped = Binary(state, spv::OpSMod, i32, index, extent);
+        const auto period = Binary(state, spv::OpIAdd, i32, extent, extent);
+        const auto folded = Binary(state, spv::OpSMod, i32, index, period);
+        const auto reflected = Binary(state, spv::OpISub, i32, Binary(state, spv::OpISub, i32, period, ConstantI32(state, 1)), folded);
+        const auto mirrored = Select(state, i32, Binary(state, spv::OpSLessThan, boolean, folded, extent), folded, reflected);
+        const auto clamped = ext(i32, GLSLstd450SClamp, {index, ConstantI32(state, 0), Binary(state, spv::OpISub, i32, extent, ConstantI32(state, 1))});
+        return Select(state, i32, equal(mode, EmulatedFilter::AddressWrap), wrapped, Select(state, i32, equal(mode, EmulatedFilter::AddressMirror), mirrored, clamped));
     };
-    const bool linear = (filter & EmulatedFilter::Linear) != 0u;
-    const auto bordered = [&](std::uint32_t mode) { return mode == EmulatedFilter::AddressBorder || (linear && mode == EmulatedFilter::AddressHalfBorder); };
-    const auto borderValue = [&]() {
-        const auto one = ConstantF32(state, 0x3f800000u);
-        const auto zero = ConstantF32(state, 0u);
-        const auto colour = EmulatedFilter::Border(filter) == EmulatedFilter::BorderOpaqueWhite ? one : zero;
-        const auto alpha = EmulatedFilter::Border(filter) == EmulatedFilter::BorderTransparentBlack ? zero : one;
-        const auto vector = state.module.AllocateId();
-        state.module.AddFunction(spv::OpCompositeConstruct, f32x4, vector, colour, colour, colour, alpha);
-        return vector;
-    };
-    const auto inside = [&](std::uint32_t index, std::uint32_t extent) {
-        const auto notBelow = Binary(state, spv::OpSGreaterThanEqual, TypeBool(state), index, ConstantI32(state, 0));
-        const auto below = Binary(state, spv::OpSLessThan, TypeBool(state), index, extent);
-        return Binary(state, spv::OpLogicalAnd, TypeBool(state), notBelow, below);
+    const auto bordered = [&](std::uint32_t mode) { return either(equal(mode, EmulatedFilter::AddressBorder), both(linear, equal(mode, EmulatedFilter::AddressHalfBorder))); };
+    const auto one = ConstantF32(state, 0x3f800000u);
+    const auto zero = ConstantF32(state, 0u);
+    const auto colour = Select(state, f32, equal(borderKind, EmulatedFilter::BorderOpaqueWhite), one, zero);
+    const auto alpha = Select(state, f32, equal(borderKind, EmulatedFilter::BorderTransparentBlack), zero, one);
+    const auto borderValue = state.module.AllocateId();
+    state.module.AddFunction(spv::OpCompositeConstruct, f32x4, borderValue, colour, colour, colour, alpha);
+    const auto outsideOf = [&](std::uint32_t index, std::uint32_t extent) {
+        const auto below = Binary(state, spv::OpSLessThan, boolean, index, ConstantI32(state, 0));
+        const auto above = Binary(state, spv::OpSGreaterThanEqual, boolean, index, extent);
+        return either(below, above);
     };
     const auto fetch = [&](std::uint32_t level, std::uint32_t width, std::uint32_t height, std::uint32_t depth, std::uint32_t x, std::uint32_t y, std::uint32_t z) {
-        const auto ux = Unary(state, spv::OpBitcast, u32, address(x, width, EmulatedFilter::AddressX(filter)));
-        const auto uy = Unary(state, spv::OpBitcast, u32, address(y, height, EmulatedFilter::AddressY(filter)));
+        const auto ux = Unary(state, spv::OpBitcast, u32, address(x, width, modeX));
+        const auto uy = Unary(state, spv::OpBitcast, u32, address(y, height, modeY));
         const auto coord = state.module.AllocateId();
-        if (volume) state.module.AddFunction(spv::OpCompositeConstruct, TypeU32Vector(state, 3), coord, ux, uy, Unary(state, spv::OpBitcast, u32, address(z, depth, EmulatedFilter::AddressZ(filter))));
+        if (volume) state.module.AddFunction(spv::OpCompositeConstruct, TypeU32Vector(state, 3), coord, ux, uy, Unary(state, spv::OpBitcast, u32, address(z, depth, modeZ)));
         else if (arrayed) state.module.AddFunction(spv::OpCompositeConstruct, TypeU32Vector(state, 3), coord, ux, uy, layer);
         else state.module.AddFunction(spv::OpCompositeConstruct, TypeU32Vector(state, 2), coord, ux, uy);
         const auto texel = state.module.AllocateId();
         state.module.AddFunction(spv::OpImageFetch, ImageVectorType(state, image.numericClass, 4), texel, descriptor, coord, spv::ImageOperandsLodMask, level);
         const auto value = Unary(state, spv::OpBitcast, f32x4, UnpackImageTexel(ctx, access, texel));
-        std::uint32_t outside = 0u;
-        if (bordered(EmulatedFilter::AddressX(filter))) outside = Unary(state, spv::OpLogicalNot, TypeBool(state), inside(x, width));
-        if (bordered(EmulatedFilter::AddressY(filter))) {
-            const auto outsideY = Unary(state, spv::OpLogicalNot, TypeBool(state), inside(y, height));
-            outside = outside == 0u ? outsideY : Binary(state, spv::OpLogicalOr, TypeBool(state), outside, outsideY);
-        }
-        if (volume && bordered(EmulatedFilter::AddressZ(filter))) {
-            const auto outsideZ = Unary(state, spv::OpLogicalNot, TypeBool(state), inside(z, depth));
-            outside = outside == 0u ? outsideZ : Binary(state, spv::OpLogicalOr, TypeBool(state), outside, outsideZ);
-        }
-        if (outside == 0u) return value;
+        auto outside = either(both(bordered(modeX), outsideOf(x, width)), both(bordered(modeY), outsideOf(y, height)));
+        if (volume) outside = either(outside, both(bordered(modeZ), outsideOf(z, depth)));
         const auto condition = state.module.AllocateId();
         state.module.AddFunction(spv::OpCompositeConstruct, TypeBoolVector(state, 4), condition, outside, outside, outside, outside);
-        return Select(state, f32x4, condition, borderValue(), value);
+        return Select(state, f32x4, condition, borderValue, value);
     };
     const auto splat = [&](std::uint32_t value) {
         const auto vector = state.module.AllocateId();
@@ -1323,30 +1324,25 @@ void EmitEmulatedFilterSample(SpirvValueEmitContext& ctx, const ImageEmitAccess&
         offsetY = extract(i32, offset, 1u);
         if (volume) offsetZ = extract(i32, offset, 2u);
     }
+    const auto half = ConstantF32(state, 0x3f000000u);
+    const auto shift = Select(state, f32, linear, half, zero);
+    const auto scaled = [&](std::uint32_t component, std::uint32_t extent, std::uint32_t mode) {
+        const auto extentF = Unary(state, spv::OpConvertSToF, f32, extent);
+        const auto raw = extract(f32, setup.coord, component);
+        const auto value = Select(state, f32, unnormalized, raw, Binary(state, spv::OpFMul, f32, raw, extentF));
+        return Select(state, f32, equal(mode, EmulatedFilter::AddressHalfBorder), ext(f32, GLSLstd450FClamp, {value, zero, extentF}), value);
+    };
     const auto filtered = [&](std::uint32_t level) {
         const auto size = levelSize(level);
         const auto width = Unary(state, spv::OpBitcast, i32, extract(u32, size, 0u));
         const auto height = Unary(state, spv::OpBitcast, i32, extract(u32, size, 1u));
         const auto depth = volume ? Unary(state, spv::OpBitcast, i32, extract(u32, size, 2u)) : ConstantI32(state, 1);
-        auto scaledW = volume ? (unnormalized ? extract(f32, setup.coord, 2u) : Binary(state, spv::OpFMul, f32, extract(f32, setup.coord, 2u), Unary(state, spv::OpConvertSToF, f32, depth))) : ConstantF32(state, 0x3f000000u);
-        if (volume && EmulatedFilter::AddressZ(filter) == EmulatedFilter::AddressHalfBorder) scaledW = ext(f32, GLSLstd450FClamp, {scaledW, ConstantF32(state, 0u), Unary(state, spv::OpConvertSToF, f32, depth)});
-        auto scaledU = unnormalized ? extract(f32, setup.coord, 0u) : Binary(state, spv::OpFMul, f32, extract(f32, setup.coord, 0u), Unary(state, spv::OpConvertSToF, f32, width));
-        auto scaledV = unnormalized ? extract(f32, setup.coord, 1u) : Binary(state, spv::OpFMul, f32, extract(f32, setup.coord, 1u), Unary(state, spv::OpConvertSToF, f32, height));
-        if (EmulatedFilter::AddressX(filter) == EmulatedFilter::AddressHalfBorder) scaledU = ext(f32, GLSLstd450FClamp, {scaledU, ConstantF32(state, 0u), Unary(state, spv::OpConvertSToF, f32, width)});
-        if (EmulatedFilter::AddressY(filter) == EmulatedFilter::AddressHalfBorder) scaledV = ext(f32, GLSLstd450FClamp, {scaledV, ConstantF32(state, 0u), Unary(state, spv::OpConvertSToF, f32, height)});
-        if (!linear) {
-            const auto x = Binary(state, spv::OpIAdd, i32, Unary(state, spv::OpConvertFToS, i32, ext(f32, GLSLstd450Floor, {scaledU})), offsetX);
-            const auto y = Binary(state, spv::OpIAdd, i32, Unary(state, spv::OpConvertFToS, i32, ext(f32, GLSLstd450Floor, {scaledV})), offsetY);
-            const auto z = Binary(state, spv::OpIAdd, i32, Unary(state, spv::OpConvertFToS, i32, ext(f32, GLSLstd450Floor, {scaledW})), offsetZ);
-            return fetch(level, width, height, depth, x, y, z);
-        }
-        const auto half = ConstantF32(state, 0x3f000000u);
-        const auto centreU = Binary(state, spv::OpFSub, f32, scaledU, half);
-        const auto centreV = Binary(state, spv::OpFSub, f32, scaledV, half);
+        const auto centreU = Binary(state, spv::OpFSub, f32, scaled(0u, width, modeX), shift);
+        const auto centreV = Binary(state, spv::OpFSub, f32, scaled(1u, height, modeY), shift);
         const auto floorU = ext(f32, GLSLstd450Floor, {centreU});
         const auto floorV = ext(f32, GLSLstd450Floor, {centreV});
-        const auto weightU = splat(Binary(state, spv::OpFSub, f32, centreU, floorU));
-        const auto weightV = splat(Binary(state, spv::OpFSub, f32, centreV, floorV));
+        const auto weightU = splat(Select(state, f32, linear, Binary(state, spv::OpFSub, f32, centreU, floorU), zero));
+        const auto weightV = splat(Select(state, f32, linear, Binary(state, spv::OpFSub, f32, centreV, floorV), zero));
         const auto x0 = Binary(state, spv::OpIAdd, i32, Unary(state, spv::OpConvertFToS, i32, floorU), offsetX);
         const auto y0 = Binary(state, spv::OpIAdd, i32, Unary(state, spv::OpConvertFToS, i32, floorV), offsetY);
         const auto x1 = Binary(state, spv::OpIAdd, i32, x0, ConstantI32(state, 1));
@@ -1357,28 +1353,34 @@ void EmitEmulatedFilterSample(SpirvValueEmitContext& ctx, const ImageEmitAccess&
             return ext(f32x4, GLSLstd450FMix, {top, bottom, weightV});
         };
         if (!volume) return slice(ConstantI32(state, 0));
-        const auto centreW = Binary(state, spv::OpFSub, f32, scaledW, half);
+        const auto rawW = extract(f32, setup.coord, 2u);
+        const auto depthF = Unary(state, spv::OpConvertSToF, f32, depth);
+        auto scaledW = Select(state, f32, unnormalized, rawW, Binary(state, spv::OpFMul, f32, rawW, depthF));
+        scaledW = Select(state, f32, equal(modeZ, EmulatedFilter::AddressHalfBorder), ext(f32, GLSLstd450FClamp, {scaledW, zero, depthF}), scaledW);
+        const auto centreW = Binary(state, spv::OpFSub, f32, scaledW, shift);
         const auto floorW = ext(f32, GLSLstd450Floor, {centreW});
         const auto z0 = Binary(state, spv::OpIAdd, i32, Unary(state, spv::OpConvertFToS, i32, floorW), offsetZ);
         const auto z1 = Binary(state, spv::OpIAdd, i32, z0, ConstantI32(state, 1));
-        return ext(f32x4, GLSLstd450FMix, {slice(z0), slice(z1), splat(Binary(state, spv::OpFSub, f32, centreW, floorW))});
+        return ext(f32x4, GLSLstd450FMix, {slice(z0), slice(z1), splat(Select(state, f32, linear, Binary(state, spv::OpFSub, f32, centreW, floorW), zero))});
     };
-    std::uint32_t result;
-    if (baseOnly) {
-        result = filtered(ConstantU32(state, 0u));
-    } else {
+    const bool explicitLod = HasFlag(mem, RdnaImageSampleFlagLod) && !HasFlag(mem, RdnaImageSampleFlagLevelZero);
+    std::uint32_t result = filtered(ConstantU32(state, 0u));
+    if (explicitLod) {
+        const auto baseOnly = either(either(unnormalized, flag(EmulatedFilter::SingleLevel)), equal(mipMode, EmulatedFilter::MipBase));
         const auto levels = state.module.AllocateId();
         state.module.AddFunction(spv::OpImageQueryLevels, u32, levels, descriptor);
         const auto top = Unary(state, spv::OpConvertUToF, f32, Binary(state, spv::OpISub, u32, levels, ConstantU32(state, 1u)));
-        const auto lod = ext(f32, GLSLstd450FClamp, {AddressF32(ctx, access, setup.layout.lod), ConstantF32(state, 0u), top});
-        if (EmulatedFilter::Mip(filter) == EmulatedFilter::MipPoint) {
-            result = filtered(Unary(state, spv::OpConvertFToU, u32, ext(f32, GLSLstd450Floor, {Binary(state, spv::OpFAdd, f32, lod, ConstantF32(state, 0x3f000000u))})));
-        } else {
-            const auto lower = ext(f32, GLSLstd450Floor, {lod});
-            const auto upper = ext(f32, GLSLstd450FMin, {Binary(state, spv::OpFAdd, f32, lower, ConstantF32(state, 0x3f800000u)), top});
-            const auto weight = splat(Binary(state, spv::OpFSub, f32, lod, lower));
-            result = ext(f32x4, GLSLstd450FMix, {filtered(Unary(state, spv::OpConvertFToU, u32, lower)), filtered(Unary(state, spv::OpConvertFToU, u32, upper)), weight});
-        }
+        auto lod = ext(f32, GLSLstd450FClamp, {AddressF32(ctx, access, setup.layout.lod), zero, top});
+        if (setup.layout.clamp != NoImageComponent) lod = ext(f32, GLSLstd450FMin, {lod, AddressF32(ctx, access, setup.layout.clamp)});
+        const auto point = equal(mipMode, EmulatedFilter::MipPoint);
+        const auto adjusted = Select(state, f32, point, Binary(state, spv::OpFAdd, f32, lod, half), lod);
+        const auto lower = ext(f32, GLSLstd450FMin, {ext(f32, GLSLstd450Floor, {adjusted}), top});
+        const auto upper = ext(f32, GLSLstd450FMin, {Binary(state, spv::OpFAdd, f32, lower, one), top});
+        const auto weight = splat(Select(state, f32, point, zero, Binary(state, spv::OpFSub, f32, adjusted, lower)));
+        const auto mipped = ext(f32x4, GLSLstd450FMix, {filtered(Unary(state, spv::OpConvertFToU, u32, lower)), filtered(Unary(state, spv::OpConvertFToU, u32, upper)), weight});
+        const auto condition = state.module.AllocateId();
+        state.module.AddFunction(spv::OpCompositeConstruct, TypeBoolVector(state, 4), condition, baseOnly, baseOnly, baseOnly, baseOnly);
+        result = Select(state, f32x4, condition, result, mipped);
     }
     const auto bits = Unary(state, spv::OpBitcast, TypeU32Vector(state, 4), result);
     ctx.Define(access.inst, TableResult(ctx, access, ResultVector(ctx, access, bits, setup.numericClass, false, false)));

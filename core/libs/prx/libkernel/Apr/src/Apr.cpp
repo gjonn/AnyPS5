@@ -142,7 +142,38 @@ int _resolveForEach(const char* prefix, const char** paths, uint32_t count, uint
     return 0;
 }
 
+struct AprProfile {
+    std::atomic<std::uint64_t> submits{0}, submitNs{0}, reads{0}, readBytes{0}, readNs{0}, waits{0}, waitNs{0}, longestSubmitNs{0};
+};
+
+AprProfile& _profile() {
+    static AprProfile profile;
+    return profile;
+}
+
+bool _profiling() {
+    static const bool enabled = std::getenv("APS5_PROFILE_APR") != nullptr;
+    return enabled;
+}
+
+void _reportProfile() {
+    static std::atomic<std::uint64_t> last{0};
+    const auto now = static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+    auto previous = last.load();
+    if (previous == 0) { last.compare_exchange_strong(previous, now); return; }
+    if (now - previous < 10000000000ull || !last.compare_exchange_strong(previous, now)) return;
+    auto& p = _profile();
+    const auto submits = p.submits.exchange(0), submitNs = p.submitNs.exchange(0), reads = p.reads.exchange(0), bytes = p.readBytes.exchange(0), readNs = p.readNs.exchange(0), waits = p.waits.exchange(0), waitNs = p.waitNs.exchange(0), longest = p.longestSubmitNs.exchange(0);
+    std::fprintf(stderr, "[apr] (10 s): %llu submits %.1f ms (longest %.1f ms); %llu reads %.1f MiB %.1f ms; %llu in-buffer waits %.1f ms\n", static_cast<unsigned long long>(submits), submitNs / 1e6, longest / 1e6, static_cast<unsigned long long>(reads), bytes / 1048576.0, readNs / 1e6, static_cast<unsigned long long>(waits), waitNs / 1e6);
+}
+
+std::uint64_t _nowNs() {
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
 void _readFile(const Apr::ReadFileCommand& command) {
+    const auto readStart = _profiling() ? _nowNs() : 0;
+    struct ReadTimer { std::uint64_t start; std::uint64_t bytes; ~ReadTimer() { if (start == 0) return; auto& p = _profile(); ++p.reads; p.readBytes += bytes; p.readNs += _nowNs() - start; } } readTimer{readStart, command.size};
     const auto file = _file(command.fileId);
     static const bool trace = std::getenv("APS5_TRACE_APR") != nullptr;
     if (trace) std::fprintf(stderr, "[apr] read %s offset=0x%llx size=0x%llx -> 0x%llx\n", file.path.string().c_str(), static_cast<unsigned long long>(command.offset), static_cast<unsigned long long>(command.size), static_cast<unsigned long long>(command.destination));
@@ -152,7 +183,14 @@ void _readFile(const Apr::ReadFileCommand& command) {
     const GuestArena::HostWrite destination(reinterpret_cast<void*>(command.destination), command.size);
     if (!destination.Open()) throw std::runtime_error("APR: the read destination of " + file.path.string() + " is not writable guest memory");
     stream.read(reinterpret_cast<char*>(command.destination), static_cast<std::streamsize>(command.size));
-    if (stream.bad()) throw std::runtime_error("APR: read failed for " + file.path.string());
+    if (stream.bad()) {
+        std::ifstream retry(file.path, std::ios::binary);
+        retry.seekg(static_cast<std::streamoff>(command.offset));
+        std::vector<char> staging(command.size);
+        retry.read(staging.data(), static_cast<std::streamsize>(command.size));
+        if (retry.bad()) throw std::runtime_error("APR: read failed for " + file.path.string());
+        std::memcpy(reinterpret_cast<void*>(command.destination), staging.data(), static_cast<std::size_t>(retry.gcount()));
+    }
     const auto read = static_cast<std::uint64_t>(stream.gcount());
     if (read != command.size) throw std::runtime_error("APR: read of " + file.path.string() + " at offset " + std::to_string(command.offset) + " returned " + std::to_string(read) + " of " + std::to_string(command.size) + " bytes");
 }
@@ -585,7 +623,9 @@ void _execute(const Apr::CommandBufferObject& buffer) {
                 return std::atomic_ref<std::uint64_t>(*reinterpret_cast<std::uint64_t*>(command.address)).load(std::memory_order_acquire);
             };
             const std::uint64_t reference = (command.reference & command.mask) << unused;
+            const auto waitStart = _profiling() ? _nowNs() : 0;
             while (!_waitSatisfied(command.compare, (current() & command.mask) << unused, reference)) std::this_thread::sleep_for(std::chrono::microseconds(50));
+            if (waitStart != 0) { ++_profile().waits; _profile().waitNs += _nowNs() - waitStart; }
             break;
         }
         case Apr::Opcode::WriteKernelEventQueue: {
@@ -705,7 +745,17 @@ int APS5_VABI sceKernelAprGetFileStat(uint32_t id, FileStat* stat) {
 int APS5_VABI sceKernelAprSubmitCommandBuffer(const Apr::CommandBufferObject* buffer, uint32_t priority) {
     (void)priority;
     if (!buffer || buffer->type != Apr::BufferType::Apr) return _fail(GUEST_EINVAL);
+    const auto start = _profiling() ? _nowNs() : 0;
     _execute(*buffer);
+    if (start != 0) {
+        const auto elapsed = _nowNs() - start;
+        auto& p = _profile();
+        ++p.submits;
+        p.submitNs += elapsed;
+        auto longest = p.longestSubmitNs.load();
+        while (elapsed > longest && !p.longestSubmitNs.compare_exchange_weak(longest, elapsed)) {}
+        _reportProfile();
+    }
     return 0;
 }
 

@@ -261,6 +261,13 @@ DescriptorBindingPlan DescriptorBindingBuilder::Prepare(const IrBindingLayout& l
     }
     std::vector<std::uint32_t> imageModes(info.images.size());
     for (std::size_t index = 0; index < info.images.size(); ++index) imageModes[index] = ResourceMaterializer::RuntimeImageMode(info.images[index], snapshot.images.at(index), info.runtimeImageModes.at(index));
+    for (std::uint32_t index = 0; index < info.images.size(); ++index) {
+        if (info.images[index].indirectRoot != ImageResource::NoIndirectImage) continue;
+        const auto& modes = info.runtimeImageModes.at(index);
+        if (std::none_of(modes.begin(), modes.end(), [](const ImageResource& mode) { return (mode.emulatedFilter & EmulatedFilter::Enabled) != 0u; })) continue;
+        const bool selected = (modes.at(imageModes[index]).emulatedFilter & EmulatedFilter::Enabled) != 0u;
+        plan.specialization.push_back({PipelineSpecialization::FilterBase + index, selected ? ResourceMaterializer::EmulatedFilterState(info, snapshot, index) : EmulatedFilter::Enabled});
+    }
     for (std::uint32_t index = 0; index < info.buffers.size(); ++index) {
         const auto& descriptor = snapshot.buffers.at(index);
         if (descriptor.dwordCount != 4u) fail("buffer specialization requires four descriptor words");

@@ -325,7 +325,8 @@ bool Driver::queue0Before(std::uint64_t received) const {
 }
 
 bool Driver::orderReleased(std::uint32_t queue, std::uint64_t received) const {
-    if (!queue0Before(received)) return true;
+    static const bool unordered = std::getenv("APS5_ASYNC_UNORDERED") != nullptr;
+    if (unordered || !queue0Before(received)) return true;
     const auto awaited = queue0Awaited.load(std::memory_order_acquire);
     if (awaited == 0) return false;
     if (workers.at(queue).unfinishedWrites.contains(awaited & ~std::uint64_t{3})) return true;

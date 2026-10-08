@@ -16,6 +16,7 @@ namespace PipelineSpecialization {
 
 inline constexpr std::uint32_t CompareBase = 49152u;
 inline constexpr std::uint32_t CompareWords = 6u;
+inline constexpr std::uint32_t FilterBase = 49664u;
 inline constexpr std::uint32_t BufferBase = 0u;
 inline constexpr std::uint32_t BufferWords = 4u;
 inline constexpr std::uint32_t ImageBase = 1024u;

@@ -1,3 +1,4 @@
+#include <cmath>
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Diagnostics.hpp"
 #include <stdexcept>
@@ -5,8 +6,7 @@
 namespace AgcDriver::DriverDetail {
 
 double TraceMs() {
-    static const auto origin = std::chrono::steady_clock::now();
-    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - origin).count();
+    return std::fmod(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(), 1.0e7);
 }
 
 void require(bool condition, const char* reason) {

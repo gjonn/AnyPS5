@@ -1,3 +1,7 @@
+#include <windows.h>
+#include <cstdlib>
+#include <cstdio>
+#include <cmath>
 #include "Equeue.hpp"
 #include "prx/libkernel/Time/include/Time.hpp"
 
@@ -332,6 +336,14 @@ int APS5_VABI sceKernelWaitEqueue(KernelEqueue eq, KernelEvent* ev, int num, int
     }
     if (timo == nullptr || *timo != 0) {
         KernelTraceWait_nid_postfix("equeue", __builtin_return_address(0), static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - waitStart).count()), *out == 0);
+        static const bool traceEvents = std::getenv("APS5_TRACE_EQUEUE_EVENTS") != nullptr;
+        const auto waitedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waitStart).count();
+        if (traceEvents && waitedMs >= 10.0) {
+            const auto image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+            std::fprintf(stderr, "[equeue] %.1f exe+0x%llx waited %.1f ms timeout %lld ->", std::fmod(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(), 1.0e7), static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(__builtin_return_address(0)) - image), waitedMs, timo ? static_cast<long long>(*timo) : -1LL);
+            for (int i = 0; i < *out && i < 4; ++i) std::fprintf(stderr, " filter %d ident 0x%llx data 0x%llx", static_cast<int>(ev[i].filter), static_cast<unsigned long long>(ev[i].ident), static_cast<unsigned long long>(ev[i].data));
+            std::fprintf(stderr, "\n");
+        }
     }
     if (*out == SCE_KERNEL_ERROR_EBADF) {
         return SCE_KERNEL_ERROR_EBADF;

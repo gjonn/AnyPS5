@@ -59,7 +59,8 @@ void Driver::waitMemory(std::span<const std::uint32_t> packet, std::uint32_t que
     const std::uint64_t awaited = packet[2] | (static_cast<std::uint64_t>(packet[3]) << 32u);
     const std::size_t awaitedBytes = Pm4::WaitAwaitedBytes(packet);
     static const bool traceGpu = std::getenv("APS5_TRACE_GPU") != nullptr;
-    if (traceGpu) std::fprintf(stderr, "[gpu] %.1f queue 0x%x waits 0x%llx == 0x%x (now 0x%x)\n", TraceMs(), queue, static_cast<unsigned long long>(packet[2] | (static_cast<std::uint64_t>(packet[3]) << 32u)), packet[4],
+    static const bool traceWaits = std::getenv("APS5_TRACE_GPU_WAITS") != nullptr;
+    if (traceGpu && traceWaits) std::fprintf(stderr, "[gpu] %.1f queue 0x%x waits 0x%llx == 0x%x (now 0x%x)\n", TraceMs(), queue, static_cast<unsigned long long>(packet[2] | (static_cast<std::uint64_t>(packet[3]) << 32u)), packet[4],
                                *reinterpret_cast<const volatile std::uint32_t*>(packet[2] | (static_cast<std::uint64_t>(packet[3]) << 32u)));
     struct WaitTrace {
         bool enabled; std::uint32_t queue; std::uint64_t address; std::chrono::steady_clock::time_point begin;

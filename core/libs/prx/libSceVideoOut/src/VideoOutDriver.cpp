@@ -1,3 +1,4 @@
+#include <cmath>
 #include <bit>
 #include <chrono>
 #include <cstdlib>
@@ -449,6 +450,8 @@ void VideoOutDriver::processFlip(FlipRequest& req) {
     require(!req.terminal && req.cfg->generation == req.generation, "flip cancelled during presentation");
     require(req.gpuComplete, "flip submitted before GPU completion");
     require(req.cfg->flipStatus.count != std::numeric_limits<uint64_t>::max(), "flip counter overflow");
+    static const bool traceGpu = std::getenv("APS5_TRACE_GPU") != nullptr;
+    if (traceGpu) std::fprintf(stderr, "[gpu] %.1f flip event index=%d\n", std::fmod(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(), 1.0e7), req.index);
     triggerEvents(*req.cfg, VIDEO_OUT_EVENT_FLIP, reinterpret_cast<void*>(req.flipArg));
     ++req.cfg->flipStatus.count;
     req.cfg->flipStatus.processTime = sceKernelGetProcessTime();
