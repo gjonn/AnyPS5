@@ -893,7 +893,7 @@ bool collectMemoEnabled() {
 // thread that never bumps its epoch never match (each collect gets a fresh epoch), as intended.
 // APS5_SHARED_COLLECT_MEMO=1 uses the tracker's shared ring under its mutex instead.
 struct ThreadCollectMemo {
-    std::array<WriteTracker::Memo, 64> entries{};
+    std::array<WriteTracker::Memo, 512> entries{};
     std::size_t next = 0;
 };
 thread_local ThreadCollectMemo threadCollectMemo;
