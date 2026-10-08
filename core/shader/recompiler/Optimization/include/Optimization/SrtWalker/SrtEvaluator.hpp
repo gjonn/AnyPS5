@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <stdexcept>
 #include <span>
 #include <vector>
@@ -188,6 +189,7 @@ private:
     EvaluatedValues _cache;
     std::vector<IrValue*> _visiting;
     DenseValues _dense;
+    std::vector<std::pair<TNode, std::unique_ptr<BasicEvaluator>>> _maskedEvaluators;
 };
 
 using Evaluator = BasicEvaluator<IrNode>;

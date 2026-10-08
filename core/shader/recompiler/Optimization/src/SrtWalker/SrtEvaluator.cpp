@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <type_traits>
 
 namespace ShaderRecompiler::Detail {
 
@@ -255,6 +256,20 @@ bool BasicEvaluator<TNode>::EvaluateInst(const TNode& inst, std::uint64_t& resul
         case IrOpcode::Phi: return EvaluatePhi(inst, result);
         case IrOpcode::ReadFirstLane: {
             const TNode mask = inst.Argument(1);
+            if constexpr (std::is_same_v<TNode, CompactNode>) {
+                static const bool reuse = std::getenv("APS5_SRT_MASK_REUSE") != nullptr;
+                if (reuse && !_masked && (_runtime.readTrace == nullptr || _runtime.readTrace->leaf == nullptr)) {
+                    for (auto& [keptMask, evaluator] : _maskedEvaluators) {
+                        if (keptMask == mask) return evaluator->EvaluateWide(inst.Argument(0), result);
+                    }
+                    if (_maskedEvaluators.size() < 8u) {
+                        auto evaluator = std::make_unique<BasicEvaluator>(_program, _runtime, _cleanFlatSlots, _cleanEvaluator, &mask);
+                        auto* selected = evaluator.get();
+                        _maskedEvaluators.emplace_back(mask, std::move(evaluator));
+                        return selected->EvaluateWide(inst.Argument(0), result);
+                    }
+                }
+            }
             BasicEvaluator active(_program, _runtime, _cleanFlatSlots, _cleanEvaluator, &mask);
             return active.EvaluateWide(inst.Argument(0), result);
         }

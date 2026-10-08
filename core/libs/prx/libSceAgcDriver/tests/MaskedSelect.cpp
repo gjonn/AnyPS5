@@ -1,7 +1,9 @@
 #include "IntermediateRepresentation/IrProgram.hpp"
 #include "Optimization/MaskedSelectEliminator.hpp"
+#include "Optimization/SrtWalker/SrtEvaluator.hpp"
 #include "RdnaDecoder/RdnaInstruction.hpp"
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -108,6 +110,81 @@ bool run(const char* name, const std::function<bool()>& test) {
 
 int main() {
     bool passed = true;
+
+    passed &= run("masked resource evaluation isolates masks and runtime inputs", [] {
+        IrResourcePlan plan;
+        plan.denseValueIds = true;
+        const auto node = [&](IrOpcode opcode, IrType type, std::initializer_list<std::uint32_t> arguments, bool immediate = false, std::uint64_t bits = 0) {
+            const auto id = static_cast<std::uint32_t>(plan.valueStorage.size());
+            auto value = std::make_unique<IrValue>(opcode, type, id);
+            for (const auto argument : arguments) value->AddArgument(plan.valueStorage[argument].get());
+            if (immediate) {
+                if (type == IrType::Bool) value->SetImmediateBool(bits != 0);
+                else value->SetImmediateU32(static_cast<std::uint32_t>(bits));
+            }
+            CompactPlanValue compact;
+            compact.opcode = opcode;
+            compact.type = type;
+            compact.firstArgument = static_cast<std::uint32_t>(plan.compact.arguments.size());
+            compact.argumentCount = static_cast<std::uint8_t>(arguments.size());
+            compact.hasImmediate = immediate;
+            compact.immediate = bits;
+            plan.compact.arguments.insert(plan.compact.arguments.end(), arguments);
+            plan.compact.values.push_back(compact);
+            plan.valueStorage.push_back(std::move(value));
+            return id;
+        };
+        const auto mask = node(IrOpcode::Void, IrType::Bool, {}, true, 0);
+        const auto otherMask = node(IrOpcode::Void, IrType::Bool, {}, true, 0);
+        const auto zero = node(IrOpcode::Void, IrType::U32, {}, true, 0);
+        const auto seven = node(IrOpcode::Void, IrType::U32, {}, true, 7);
+        const auto base = node(IrOpcode::GetShaderBase, IrType::U64, {});
+        const auto low = node(IrOpcode::CompositeExtractU64, IrType::U32, {base, zero});
+        const auto select = node(IrOpcode::SelectU32, IrType::U32, {mask, low, seven});
+        const auto first = node(IrOpcode::ReadFirstLane, IrType::U32, {select, mask});
+        const auto second = node(IrOpcode::ReadFirstLane, IrType::U32, {select, mask});
+        const auto other = node(IrOpcode::ReadFirstLane, IrType::U32, {select, otherMask});
+        const auto address = node(IrOpcode::Void, IrType::U32, {}, true, 4096);
+        const auto handle = node(IrOpcode::CompositeConstructU64, IrType::U64, {address, zero});
+        plan.memoryInfo.emplace_back();
+        plan.memoryInfo.back().kind = ResourceKind::ScalarAddress;
+        const auto read = node(IrOpcode::LoadAddressU32, IrType::U32, {handle, zero});
+        const auto readFirst = node(IrOpcode::ReadFirstLane, IrType::U32, {read, mask});
+        const auto readSecond = node(IrOpcode::ReadFirstLane, IrType::U32, {read, mask});
+        for (const auto address : {42u, 91u}) {
+            SrtRuntime runtime;
+            runtime.shaderBase = address;
+            Detail::CompactEvaluator compact(plan, runtime);
+            Detail::Evaluator reference(plan, runtime);
+            for (const auto id : {first, second, other}) {
+                std::uint32_t actual = 0, expected = 0;
+                if (!compact.Evaluate({plan, id}, actual) || !reference.Evaluate(Detail::IrNode(plan.valueStorage[id].get()), expected)) return false;
+                if (actual != expected || actual != (id == other ? 7u : address)) return false;
+            }
+        }
+        for (const bool tracedLeaf : {false, true}) {
+            std::uint32_t reads = 0;
+            SrtReadTrace trace;
+            if (tracedLeaf) trace.leaf = plan.valueStorage[read].get();
+            SrtRuntime runtime;
+            runtime.readTrace = &trace;
+            runtime.userContext = &reads;
+            runtime.readMemory = [](void* context, std::uint64_t address, std::uint32_t* result) {
+                ++*static_cast<std::uint32_t*>(context);
+                *result = 17;
+                return address == 4096;
+            };
+            Detail::CompactEvaluator evaluator(plan, runtime);
+            for (const auto id : {readFirst, readSecond}) {
+                std::uint32_t value = 0;
+                if (!evaluator.Evaluate({plan, id}, value) || value != 17) return false;
+            }
+            const auto expected = !tracedLeaf && std::getenv("APS5_SRT_MASK_REUSE") != nullptr ? 1u : 2u;
+            if (reads != expected) return false;
+            if (tracedLeaf ? trace.leaves.size() != 2u : trace.otherReads.size() != expected) return false;
+        }
+        return true;
+    });
 
     passed &= run("a write read only under its own exec must lose its select", [] {
         Builder b;
