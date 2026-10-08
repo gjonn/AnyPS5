@@ -467,7 +467,6 @@ std::shared_ptr<Texture> DepthSurfaceTexture(const Context& context, std::span<c
             versions.emplace_back(slice->get(), (*slice)->generation);
         } else {
             const auto guest = resource.baseAddress + geometry.GuestLayerOffset(layer);
-            GuestMemory::FlushGpuWrites(guest, static_cast<std::size_t>(geometry.layerBytes));
             versions.emplace_back(nullptr, GuestMemory::CollectWrites(guest, static_cast<std::size_t>(geometry.layerBytes)));
         }
         slices.push_back(slice == list.rend() ? VK_NULL_HANDLE : (*slice)->image);
