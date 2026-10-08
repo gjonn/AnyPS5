@@ -1,3 +1,5 @@
+#include <cstdio>
+#include <atomic>
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
 #include <mutex>
 
@@ -111,12 +113,27 @@ extern "C" void AgcDriverReportFailure_nid_postfix(std::exception_ptr error) {
 }
 
 extern "C" void AgcDriverResolveShaderAbi_nid_postfix(const Shader* shader, std::span<const ShaderRegister> context, std::span<const ShaderRegister> primitive) {
-    AgcDriver::DriverDetail::Driver::Get().ResolveShaderAbi(shader, context, primitive);
+    try {
+        AgcDriver::DriverDetail::Driver::Get().ResolveShaderAbi(shader, context, primitive);
+    } catch (const std::exception& error) {
+        static std::atomic<std::uint32_t> reports{0};
+        if (reports.fetch_add(1) < 20) std::fprintf(stderr, "[abi] ResolveShaderAbi failed (shader %p): %.200s\n", static_cast<const void*>(shader), error.what());
+    }
 }
 
 extern "C" void AgcDriverResolveGraphicsAbi_nid_postfix(const Shader* vertex, const Shader* pixel, std::uint32_t primitiveType) {
-    AgcDriver::DriverDetail::Driver::Get().ResolveGraphicsAbi(vertex, pixel, primitiveType);
+    try {
+        AgcDriver::DriverDetail::Driver::Get().ResolveGraphicsAbi(vertex, pixel, primitiveType);
+    } catch (const std::exception& error) {
+        static std::atomic<std::uint32_t> reports{0};
+        if (reports.fetch_add(1) < 20) std::fprintf(stderr, "[abi] ResolveGraphicsAbi failed (vertex %p pixel %p primitive %u): %.200s\n", static_cast<const void*>(vertex), static_cast<const void*>(pixel), primitiveType, error.what());
+    }
 }
 extern "C" void AgcDriverResolveGraphicsStagesAbi_nid_postfix(std::span<const Shader* const> stages, std::span<const ShaderRegister> context, std::span<const ShaderRegister> primitive) {
-    AgcDriver::DriverDetail::Driver::Get().ResolveGraphicsStagesAbi(stages, context, primitive);
+    try {
+        AgcDriver::DriverDetail::Driver::Get().ResolveGraphicsStagesAbi(stages, context, primitive);
+    } catch (const std::exception& error) {
+        static std::atomic<std::uint32_t> reports{0};
+        if (reports.fetch_add(1) < 20) std::fprintf(stderr, "[abi] ResolveGraphicsStagesAbi failed (first stage %p of %zu): %.200s\n", stages.empty() ? nullptr : static_cast<const void*>(stages.front()), stages.size(), error.what());
+    }
 }

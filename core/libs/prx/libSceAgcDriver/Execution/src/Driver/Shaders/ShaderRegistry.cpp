@@ -1,3 +1,5 @@
+#include <atomic>
+#include <windows.h>
 #include <cstdio>
 #include <mutex>
 #include <set>
@@ -185,6 +187,13 @@ std::shared_ptr<const ShaderRecompiler::SourceHandle> SourceHandleFor(const Shad
         snapshot.prepared->entries.push_back({codeOffset, handle});
         return handle;
     }
+    {
+        static std::atomic<std::uint32_t> lateReports{0};
+        if (lateReports.fetch_add(1) < 40) std::fprintf(stderr, "[prepare] shader 0x%llx stage %u prepared at first use for push offset %u\n", static_cast<unsigned long long>(request.shader.codeAddress), static_cast<unsigned>(request.shader.stage), request.layout.pushConstantOffsetBytes);
+        auto handle = ShaderRecompiler::PrepareShader(request);
+        snapshot.prepared->entries.push_back({codeOffset, handle});
+        return handle;
+    }
     std::string layouts;
     for (const auto& entry : snapshot.prepared->entries) {
         if (entry.codeOffset != codeOffset || entry.handle == nullptr || entry.handle->artifact == nullptr) continue;
@@ -229,6 +238,18 @@ ShaderRecompiler::PreparedShaderInvocation InvocationFor(const ShaderSnapshot& s
         if (!invocation.has_value()) throw std::runtime_error("AGC driver: raw compute artifact does not match its invocation");
         snapshot.prepared->entries.push_back({codeOffset, std::move(handle)});
         return std::move(*invocation);
+    }
+    {
+        static std::atomic<std::uint32_t> lateReports{0};
+        if (lateReports.fetch_add(1) < 40) std::fprintf(stderr, "[prepare] shader 0x%llx stage %u prepared at first use for push offset %u\n", static_cast<unsigned long long>(request.shader.codeAddress), static_cast<unsigned>(request.shader.stage), request.layout.pushConstantOffsetBytes);
+        auto handle = ShaderRecompiler::PrepareShader(request);
+        invocationRequest = request;
+        invocationRequest.shader.code = ShaderRecompiler::GetPreparedCode(*handle);
+        auto invocation = ShaderRecompiler::PreparedShaderInvocation::TryCreate(invocationRequest, handle, key);
+        if (invocation.has_value()) {
+            snapshot.prepared->entries.push_back({codeOffset, std::move(handle)});
+            return std::move(*invocation);
+        }
     }
     std::string layouts;
     for (const auto& entry : snapshot.prepared->entries) {
@@ -293,10 +314,31 @@ void BuildRegisteredAbiKey(const QueueState& state, const VulkanDevice& device, 
     }
 }
 
+void ReportCompileProgress(bool failed) {
+    static std::atomic<std::uint32_t> compiled{0};
+    static std::atomic<std::uint32_t> failures{0};
+    static std::atomic<std::uint64_t> lastMs{0};
+    (failed ? failures : compiled).fetch_add(1, std::memory_order_relaxed);
+    const auto nowMs = static_cast<std::uint64_t>(GetTickCount64());
+    auto last = lastMs.load(std::memory_order_relaxed);
+    if (nowMs - last < 250 || !lastMs.compare_exchange_strong(last, nowMs)) return;
+    char text[96];
+    const int length = std::snprintf(text, sizeof(text), "Compiling shaders: %u compiled, %u failed", compiled.load(), failures.load());
+    SetConsoleTitleA(text);
+    static const HANDLE console = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (console == INVALID_HANDLE_VALUE || length <= 0) return;
+    DWORD written = 0;
+    WriteFile(console, "\r", 1, &written, nullptr);
+    WriteFile(console, text, static_cast<DWORD>(length), &written, nullptr);
+}
+
 std::shared_ptr<const ShaderRecompiler::SourceHandle> TryPrepareShader(const ShaderRecompiler::RecompileRequest& request) {
     try {
-        return ShaderRecompiler::PrepareShader(request);
+        auto handle = ShaderRecompiler::PrepareShader(request);
+        ReportCompileProgress(false);
+        return handle;
     } catch (const std::exception& error) {
+        ReportCompileProgress(true);
         static std::mutex reportMutex;
         static std::set<std::uint64_t> reported;
         std::lock_guard lock(reportMutex);
@@ -388,6 +430,7 @@ std::vector<PreparedShaders::Entry> PrepareRegistered(const ShaderSnapshot& snap
     try {
         return PrepareRegisteredImpl(snapshot, device, state, registration);
     } catch (const std::exception& error) {
+        ReportCompileProgress(true);
         static std::mutex reportMutex;
         static std::set<std::uint64_t> reported;
         std::lock_guard lock(reportMutex);
@@ -467,7 +510,7 @@ void Driver::ResolveGraphicsStagesAbi(std::span<const Shader* const> stages, std
         std::lock_guard lock(mutex);
         registry = shaders;
         for (const auto* shader : stages) {
-            GuestMemory::CheckRange(shader, sizeof(Shader), alignof(Shader));
+            GuestMemory::CheckRange(shader, sizeof(Shader), 4);
             const auto address = reinterpret_cast<std::uintptr_t>(const_cast<const void*>(shader->code));
             require(registry != nullptr && registry->contains(address), "graphics ABI refers to an unregistered shader");
             if (owner == nullptr) owner = registry->at(address);
@@ -524,7 +567,7 @@ void Driver::ResolveShaderAbi(const Shader* shader, std::span<const ShaderRegist
     PerformanceTimer timing("Shader.ResolveAbi");
     ShaderPreparationTransaction transaction;
     CheckFailure();
-    GuestMemory::CheckRange(shader, sizeof(Shader), alignof(Shader));
+    GuestMemory::CheckRange(shader, sizeof(Shader), 4);
     if (shader->type != 0 && shader->type != 1) {
         const std::array<const Shader*, 1> stages{shader};
         ResolveGraphicsStagesAbi(stages, context, primitive);
@@ -597,8 +640,8 @@ void Driver::ResolveGraphicsAbi(const Shader* vertex, const Shader* pixel, std::
     std::shared_ptr<const ShaderSnapshot> fragment;
     {
         std::lock_guard lock(mutex);
-        GuestMemory::CheckRange(vertex, sizeof(Shader), alignof(Shader));
-        GuestMemory::CheckRange(pixel, sizeof(Shader), alignof(Shader));
+        GuestMemory::CheckRange(vertex, sizeof(Shader), 4);
+        GuestMemory::CheckRange(pixel, sizeof(Shader), 4);
         const auto lookup = [&](const Shader* shader) {
             const auto address = reinterpret_cast<std::uintptr_t>(const_cast<const void*>(shader->code));
             require(shaders != nullptr && shaders->contains(address), "rectangle ABI refers to an unregistered shader");

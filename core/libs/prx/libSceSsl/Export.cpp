@@ -107,8 +107,8 @@ int APS5_VABI sceSslGetSubjectName(void) {
 
 // GT7-LOCAL-PLACEHOLDER BEGIN
 extern "C" {
-int APS5_VABI sceSslConnect() { NotImplemented_nid_no_patch(__func__); return 0; }
-int APS5_VABI sceSslCreateConnection() { NotImplemented_nid_no_patch(__func__); return 0; }
+int APS5_VABI sceSslConnect() { return ERROR_NETWORK; }
+int APS5_VABI sceSslCreateConnection() { return ERROR_NETWORK; }
 int APS5_VABI sceSslDeleteConnection() { NotImplemented_nid_no_patch(__func__); return 0; }
 int APS5_VABI sceSslDisableVerifyOption() { NotImplemented_nid_no_patch(__func__); return 0; }
 int APS5_VABI sceSslEnableVerifyOption() { NotImplemented_nid_no_patch(__func__); return 0; }

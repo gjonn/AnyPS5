@@ -317,7 +317,7 @@ void Driver::execute(const Submission& submission) {
                     CaptureTrace::Log("draw submission=%llu queue=%x offset=%zu target=%llx mask=%x verdict=%d reason=%.256s", static_cast<unsigned long long>(submission.serial), submission.queue, cursor, static_cast<unsigned long long>(color), readRegister(queue.context, 0x8e), static_cast<int>(verdict), rejected.c_str());
                     if (verdict == DrawVerdict::Rejected) {
                         countSkip(Graphics::DrawSkip::Prechecked);
-                        throw std::runtime_error(rejected);
+                        reportSkip("draw", rejected);
                     } else if (verdict == DrawVerdict::Nothing) {
                         countSkip(Graphics::DrawSkip::Nothing);
                     } else if (traceDraws) {
@@ -326,7 +326,7 @@ void Driver::execute(const Submission& submission) {
                 } catch (const std::exception& error) {
                     CaptureTrace::Log("draw-error submission=%llu offset=%zu reason=%.256s", static_cast<unsigned long long>(submission.serial), cursor, error.what());
                     countSkip(Graphics::DrawSkip::Thrown);
-                    throw;
+                    reportSkip("draw", error.what());
                 }
             });
             finishDrawPacket(drawn);
