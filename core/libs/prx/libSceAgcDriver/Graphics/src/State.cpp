@@ -454,7 +454,8 @@ State DecodeState(const QueueState& queue) {
             break;
         case 9: result.topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST; break;
         case 4: result.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST; break;
-        case 5: result.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN; break;
+        case 5:
+        case 21: result.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN; break;
         case 6: result.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP; break;
         default: throw std::runtime_error("AGC graphics: unsupported primitive type " + std::to_string(primitive));
     }
@@ -606,7 +607,7 @@ State DecodeState(const QueueState& queue) {
             if (((exportedMask >> ((mapping >> (2u * component)) & 3u)) & 1u) != 0) state.colorWriteMask |= 1u << component;
         }
         state.blendEnable = (blend >> 30u) & 1u;
-        if (state.blendEnable && (mapping == 0x1bu || mapping == 0x93u)) throw std::runtime_error("AGC graphics: blending into a color target with a reversed component order is not implemented");
+        if (state.blendEnable && (mapping == 0x1bu || mapping == 0x93u)) throw std::runtime_error("AGC graphics: blending into a color target with a reversed component order is not implemented DBG blend 0x" + [&] { char b[16]; std::snprintf(b, sizeof(b), "%08x", blend); return std::string(b); }() + " mapping " + std::to_string(mapping) + " format " + std::to_string(color.format) + " mask " + std::to_string(exportedMask));
         if (state.blendEnable) {
             Require((read(cx, 0x31c + slot * 0xfu) & 0x10000u) == 0, "blend bypass conflicts with enabled blending");
             state.srcColorBlendFactor = blendFactor(blend & 0x1fu);
