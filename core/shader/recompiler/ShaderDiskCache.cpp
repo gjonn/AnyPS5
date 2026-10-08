@@ -419,6 +419,7 @@ void encodeInfo(Writer& writer, const CompiledShaderInfo& compiled) {
         out.Value(image.packed);
         out.Value(image.packedFormat);
         out.Value(image.emulatedCompare);
+        out.Value(image.constantSwizzle);
         out.Value(image.emulatedFilter);
         out.Value(image.indirectRoot);
         out.Value(image.indirectMappingOffset);
@@ -430,6 +431,7 @@ void encodeInfo(Writer& writer, const CompiledShaderInfo& compiled) {
         out.Value(sampler.firstUsePc);
         out.Value(sampler.forcePointFiltering);
         out.Value(sampler.depthCompare);
+        out.Value(sampler.unnormalized);
         out.Value(sampler.uses);
     });
     writer.List(info.sampledPairs, [](Writer& out, const SampledResourcePair& pair) {
@@ -513,6 +515,7 @@ void decodeInfo(Reader& reader, CompiledShaderInfo& compiled) {
         in.Value(image.packed);
         in.Value(image.packedFormat);
         in.Value(image.emulatedCompare);
+        in.Value(image.constantSwizzle);
         in.Value(image.emulatedFilter);
         in.Value(image.indirectRoot);
         in.Value(image.indirectMappingOffset);
@@ -524,6 +527,7 @@ void decodeInfo(Reader& reader, CompiledShaderInfo& compiled) {
         in.Value(sampler.firstUsePc);
         in.Value(sampler.forcePointFiltering);
         in.Value(sampler.depthCompare);
+        in.Value(sampler.unnormalized);
         in.Value(sampler.uses);
     });
     reader.List(info.sampledPairs, 12, [](Reader& in, SampledResourcePair& pair) {
@@ -831,9 +835,11 @@ void BuildKey(const RecompileRequest& request, std::uint32_t hostSubgroupSize, c
         out.Value(image.depthUnorm16);
         out.Value(image.packedFormat);
         out.Value(image.emulatedCompare);
+        out.Value(image.constantSwizzle);
         out.Value(image.emulatedFilter);
         out.Value(image.srgbDecode);
     });
+    writer.Values(std::span<const std::uint32_t>(specialization.unnormalizedSamplers));
     writer.Values(std::span<const std::uint32_t>(specialization.boundDescriptors));
     const auto& switches = switchKey();
     key.insert(key.end(), switches.begin(), switches.end());

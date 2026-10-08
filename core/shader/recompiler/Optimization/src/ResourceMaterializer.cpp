@@ -47,6 +47,7 @@ struct DecodedImage {
     bool depthUnorm16 = false;
     IrBufferFormat packedFormat = IrBufferFormat::Invalid;
     bool srgbDecode = false;
+    std::uint32_t constantSwizzle = 0;
 };
 
 ShaderBufferResource decodeBufferDescriptor(const DescriptorValue& value) {
@@ -196,6 +197,12 @@ DecodedImage decodeImageDescriptor(const DescriptorValue& descriptor, const Imag
         }
     } else if (decoded.numericClass == IrTextureNumericClass::Unsupported || (base.depthCompare && decoded.numericClass != IrTextureNumericClass::Float)) {
         throw std::runtime_error("sampled image descriptor uses an unsupported format");
+    }
+    const auto swizzle = descriptorImageSwizzle(descriptor);
+    const bool constantChannels = ((swizzle & 06666u) == 0u);
+    if (!storage && constantChannels && !base.depthCompare && !base.packed && !decoded.fmask && !decoded.depthBits && decoded.conversionFormat == IrBufferFormat::Invalid && !decoded.srgbDecode) {
+        decoded.constantSwizzle = 1u;
+        for (std::uint32_t channel = 0; channel < 4u; channel++) decoded.constantSwizzle |= ((swizzle >> (channel * 3u)) & 1u) << (channel + 1u);
     }
     return decoded;
 }
@@ -598,7 +605,6 @@ std::uint32_t emulatedFilterState(const IrResourcePlan& plan, const ResourceSnap
         const auto addressX = addressMode(clampX);
         const auto addressY = addressMode(clampY);
         if (magFilter != minFilter || magFilter > 1u) throw std::runtime_error("filtering a converted image in the shader is implemented only with equal point or bilinear minification and magnification filters");
-        if (unnormalized) throw std::runtime_error("filtering a converted image in the shader does not implement unnormalized coordinates");
         const auto borderType = (words[3] >> 30u) & 0x3u;
         const bool border = addressX == EmulatedFilter::AddressBorder || addressX == EmulatedFilter::AddressHalfBorder || addressY == EmulatedFilter::AddressBorder || addressY == EmulatedFilter::AddressHalfBorder;
         if (border && borderType == 3u) throw std::runtime_error("filtering a converted image in the shader with a border color table is not implemented");
@@ -609,7 +615,7 @@ std::uint32_t emulatedFilterState(const IrResourcePlan& plan, const ResourceSnap
         const auto lastLevel = (descriptor.dwords[3] >> 16u) & 0xfu;
         const bool lodClamped = (words[2] & 0x3fffu) != 0u || (words[1] & 0xfffu) != 0u || ((words[1] >> 12u) & 0xfffu) < (lastLevel - baseLevel) * 256u || ((descriptor.dwords[1] >> 8u) & 0xfffu) > baseLevel * 256u;
         if (lastLevel > baseLevel && mip != EmulatedFilter::MipBase && lodClamped) throw std::runtime_error("filtering a converted image in the shader across mip levels with a LOD bias or clamp is not implemented");
-        const auto state = EmulatedFilter::Enabled | (magFilter == 1u ? EmulatedFilter::Linear : 0u) | (addressX << EmulatedFilter::ClampXShift) | (addressY << EmulatedFilter::ClampYShift) | (mip << EmulatedFilter::MipShift) | ((border ? borderType : 0u) << EmulatedFilter::BorderShift);
+        const auto state = EmulatedFilter::Enabled | (magFilter == 1u ? EmulatedFilter::Linear : 0u) | (addressX << EmulatedFilter::ClampXShift) | (addressY << EmulatedFilter::ClampYShift) | (mip << EmulatedFilter::MipShift) | ((border ? borderType : 0u) << EmulatedFilter::BorderShift) | (unnormalized ? EmulatedFilter::Unnormalized : 0u);
         if (filterState.has_value() && *filterState != state) throw std::runtime_error("filtering a converted image in the shader through samplers that disagree is not implemented");
         filterState = state;
     }
@@ -666,6 +672,7 @@ void buildResourceSpecialization(const IrResourcePlan& plan, ResourceSnapshot& s
         entry.depthUnorm16 = decoded.depthUnorm16;
         entry.packedFormat = decoded.packedFormat;
         entry.emulatedCompare = emulatedCompareState(plan, snapshot, i);
+        entry.constantSwizzle = decoded.constantSwizzle;
         entry.emulatedFilter = emulatedFilterState(plan, snapshot, i, decoded.conversionFormat);
         entry.srgbDecode = decoded.srgbDecode;
         result.images.push_back(entry);
@@ -699,6 +706,11 @@ void buildResourceSpecialization(const IrResourcePlan& plan, ResourceSnapshot& s
         }
     }
 
+    result.unnormalizedSamplers.assign(snapshot.samplers.size(), 0u);
+    for (std::uint32_t index = 0; index < snapshot.samplers.size(); index++) {
+        const auto& sampler = snapshot.samplers[index];
+        if (sampler.dwordCount == 4u && ((sampler.dwords[0] >> 15u) & 1u) != 0u) result.unnormalizedSamplers[index] = 1u;
+    }
     result.boundDescriptors.clear();
     result.boundDescriptors.reserve(result.buffers.size() + result.images.size());
     for (std::uint32_t index = 0; index < result.buffers.size(); index++) {
@@ -756,6 +768,7 @@ void ResourceMaterializer::Apply(IrProgram& program, const ResourceSpecializatio
         image.depthUnorm16 = source.depthUnorm16;
         image.packedFormat = source.packedFormat;
         image.emulatedCompare = source.emulatedCompare;
+        image.constantSwizzle = source.constantSwizzle;
         image.emulatedFilter = source.emulatedFilter;
         image.srgbDecode = source.srgbDecode;
         if ((source.emulatedCompare & EmulatedCompare::Enabled) != 0u) image.depthCompare = false;
@@ -795,6 +808,9 @@ void ResourceMaterializer::Apply(IrProgram& program, const ResourceSpecializatio
         }
     }
     auto samplers = resources.info.samplers;
+    for (std::uint32_t index = 0; index < samplers.size() && index < specialization.unnormalizedSamplers.size(); index++) {
+        samplers[index].unnormalized = specialization.unnormalizedSamplers[index] != 0u;
+    }
     auto sampledPairs = resources.info.sampledPairs;
     samplers.reserve(samplerCount);
     for (std::uint32_t index = 0; index < resources.info.samplers.size(); index++) {
@@ -1088,11 +1104,11 @@ bool ResourceSpecialization::Buffer::operator==(const Buffer& other) const {
 }
 
 bool ResourceSpecialization::Image::operator==(const Image& other) const {
-    return numericClass == other.numericClass && dimension == other.dimension && mipCount == other.mipCount && conversionFormat == other.conversionFormat && shaderSwizzle == other.shaderSwizzle && indirectRoot == other.indirectRoot && indirectMappingOffset == other.indirectMappingOffset && indirectSearchIterations == other.indirectSearchIterations && cube == other.cube && fmask == other.fmask && depthBits == other.depthBits && depthUnorm16 == other.depthUnorm16 && packedFormat == other.packedFormat && emulatedCompare == other.emulatedCompare && emulatedFilter == other.emulatedFilter && srgbDecode == other.srgbDecode;
+    return numericClass == other.numericClass && dimension == other.dimension && mipCount == other.mipCount && conversionFormat == other.conversionFormat && shaderSwizzle == other.shaderSwizzle && indirectRoot == other.indirectRoot && indirectMappingOffset == other.indirectMappingOffset && indirectSearchIterations == other.indirectSearchIterations && cube == other.cube && fmask == other.fmask && depthBits == other.depthBits && depthUnorm16 == other.depthUnorm16 && packedFormat == other.packedFormat && emulatedCompare == other.emulatedCompare && constantSwizzle == other.constantSwizzle && emulatedFilter == other.emulatedFilter && srgbDecode == other.srgbDecode;
 }
 
 bool ResourceSpecialization::operator==(const ResourceSpecialization& other) const {
-    return buffers == other.buffers && images == other.images;
+    return buffers == other.buffers && images == other.images && unnormalizedSamplers == other.unnormalizedSamplers;
 }
 
 }

@@ -67,6 +67,7 @@ inline constexpr std::uint32_t ClampYShift = 5u;
 inline constexpr std::uint32_t SingleLevel = 1u << 8u;
 inline constexpr std::uint32_t MipShift = 9u;
 inline constexpr std::uint32_t BorderShift = 11u;
+inline constexpr std::uint32_t Unnormalized = 1u << 13u;
 inline constexpr std::uint32_t AddressWrap = 0u;
 inline constexpr std::uint32_t AddressEdge = 1u;
 inline constexpr std::uint32_t AddressMirror = 2u;
@@ -109,6 +110,7 @@ struct ImageResource {
     bool packed = false;
     IrBufferFormat packedFormat = IrBufferFormat::Invalid;
     std::uint32_t emulatedCompare = 0;
+    std::uint32_t constantSwizzle = 0;
     std::uint32_t emulatedFilter = 0;
     std::uint32_t indirectRoot = NoIndirectImage;
     std::uint32_t indirectMappingOffset = 0;
@@ -138,6 +140,7 @@ struct SamplerResource {
     std::uint32_t firstUsePc = 0;
     bool forcePointFiltering = false;
     bool depthCompare = false;
+    bool unnormalized = false;
     std::uint8_t uses = 0;
 
     bool operator==(const SamplerResource& other) const = default;

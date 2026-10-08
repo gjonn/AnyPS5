@@ -29,6 +29,7 @@ constexpr std::int32_t Height = 7;
 constexpr std::uint32_t StorageLevels = 4;
 constexpr std::uint32_t Format8888UNorm = 56;
 constexpr std::uint32_t Type2D = 9;
+constexpr std::uint32_t Type3D = 10;
 constexpr std::uint8_t OtherLevelTexel = 0x40u;
 alignas(256) std::array<std::uint32_t, Threads * Words> Buffer{};
 alignas(256) std::array<std::uint8_t, 16384> SingleLevel{};
@@ -40,6 +41,12 @@ alignas(256) constexpr std::array<std::uint32_t, 40> Code{
     0x80000801, 0xe0701014, 0x80000901, 0xe0701018, 0x80000a01, 0xe070101c, 0x80000b01, 0xe0701020,
     0x80000c01, 0xe0701024, 0x80000d01, 0xe0701028, 0x80000e01, 0xe070102c, 0x80000f01, 0xe0701030,
     0x80001001, 0xe0701034, 0x80001101, 0xe0701038, 0x80001201, 0xe070103c, 0x80001301, 0xbf810000,
+};
+
+alignas(256) constexpr std::array<std::uint32_t, 22> GradientCode{
+    0x34020086, 0xe0301000, 0x80000601, 0xe0301004, 0x80000701, 0xbf8c3f70, 0x7e0402f6, 0x7e060280,
+    0x7e080280, 0x7e0a02f6, 0xf0880f08, 0x00610802, 0xbf8c3f70, 0xe0701010, 0x80000801, 0xe0701014,
+    0x80000901, 0xe0701018, 0x80000a01, 0xe070101c, 0x80000b01, 0xbf810000,
 };
 
 constexpr std::array<const char*, 3> Instructions{"image_sample_lz", "image_sample_l 2.7", "image_sample"};
@@ -139,7 +146,7 @@ std::array<std::uint32_t, 8> TextureDescriptor(const void* data, std::uint32_t l
 
 using Samples = std::vector<std::array<std::uint32_t, Results>>;
 
-Samples Run(AgcDriver::VulkanDevice& device, const std::array<std::uint32_t, 8>& texture, const std::array<std::uint32_t, 4>& sampler, const std::vector<Coordinate>& coordinates) {
+Samples Run(AgcDriver::VulkanDevice& device, const std::array<std::uint32_t, 8>& texture, const std::array<std::uint32_t, 4>& sampler, const std::vector<Coordinate>& coordinates, std::span<const std::uint32_t> code = Code) {
     Samples samples;
     for (std::size_t first = 0; first < coordinates.size(); first += Threads) {
         Buffer.fill(0xdeadbeefu);
@@ -153,7 +160,6 @@ Samples Run(AgcDriver::VulkanDevice& device, const std::array<std::uint32_t, 8>&
         std::copy(buffer.begin(), buffer.end(), userData.begin());
         std::copy(texture.begin(), texture.end(), userData.begin() + 4);
         std::copy(sampler.begin(), sampler.end(), userData.begin() + 12);
-        const std::span<const std::uint32_t> code(Code);
         const std::array<ShaderRecompiler::MemoryRegion, 1> memory{{{reinterpret_cast<std::uintptr_t>(code.data()), std::as_bytes(code)}}};
         const ShaderRecompiler::ShaderComputeStageInfo compute{{Threads, 1, 1}, 0u, {false, false, false}, false, 1};
         ShaderRecompiler::RecompileRequest request{
@@ -244,6 +250,12 @@ int main() {
             const auto multiSamples = Run(*device, multi, sampler.words, coordinates);
             Check(sampler, 0u, "first level of a 4-level image", coordinates, multiSamples);
             Require(multiSamples == singleSamples, std::string(sampler.name) + ": the first level of a 4-level image does not sample like a 1-level image");
+            const auto gradientSamples = Run(*device, multi, sampler.words, coordinates, GradientCode);
+            for (std::size_t index = 0; index < gradientSamples.size(); ++index) {
+                for (std::uint32_t component = 0; component < 4u; ++component) {
+                    Require(gradientSamples[index][component] == singleSamples[index][component], std::string(sampler.name) + ": image_sample_d with large derivatives did not sample the base level (sample " + std::to_string(index) + ")");
+                }
+            }
             const auto chainSamples = Run(*device, chain, sampler.words, coordinates);
             Check(sampler, 0u, "4-level view", coordinates, chainSamples);
             Require(chainSamples == singleSamples, std::string(sampler.name) + ": a 4-level view does not sample its base level like a 1-level image");
@@ -251,6 +263,17 @@ int main() {
         }
         ExpectFailure(*device, single, {0x00008092u, 0x00fff000u, 0x05100000u, 0u}, "different minification", "unequal minification and magnification filters");
         ExpectFailure(*device, single, {0x00008090u, 0x00fff000u, 0x05500000u, 0u}, "clamp mode 0", "wrap on X");
+        auto constant = TextureDescriptor(SingleLevel.data(), 0u, 0u);
+        constant[3] = 0x041u | (Type3D << 28u);
+        for (const auto& sampler : Samplers) {
+            const auto samples = Run(*device, constant, sampler.words, coordinates);
+            for (const auto& sample : samples) {
+                for (std::uint32_t index = 0; index < Results; ++index) {
+                    const std::uint32_t expected = (index % 4u == 0u || index % 4u == 2u) ? 0x3f800000u : 0u;
+                    Require(sample[index] == expected, std::string(sampler.name) + ": a 3D view whose channels select constants returned 0x" + std::to_string(sample[index]) + " for result " + std::to_string(index));
+                }
+            }
+        }
         std::puts("image sample unnormalized tests passed");
         return 0;
     } catch (const std::exception& error) {

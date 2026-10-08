@@ -161,23 +161,37 @@ std::uint32_t CubeLayer(SpirvEmitterState& state, std::uint32_t value) {
     return result;
 }
 
-std::uint32_t CoordF32(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, std::uint32_t first, std::uint32_t components, std::uint32_t encoded) {
-    if (first == NoImageComponent || encoded < components || access.mem.imageAddressComponents < first + encoded) {
+std::uint32_t CoordF32(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, std::uint32_t first, std::uint32_t components, std::uint32_t encoded, bool position = false) {
+    const bool cube = access.image.cube;
+    const auto present = std::min(encoded, components);
+    if (first == NoImageComponent || (encoded < components && (cube || encoded == 0u)) || access.mem.imageAddressComponents < first + present) {
         ctx.Fail(access.inst, "has an image address with too few coordinate components");
     }
-    const bool cube = access.image.cube;
-    auto x = AddressF32(ctx, access, first);
+    std::uint32_t size = 0;
+    const auto component = [&](std::uint32_t index) {
+        if (index < present) return AddressF32(ctx, access, first + index);
+        if (!position || index >= RdnaImageDimensionInfoFor(access.image.dimension).spatialComponents) return ZeroF32(ctx.state);
+        if (size == 0u) {
+            ctx.state.module.EmitCapability(spv::CapabilityImageQuery);
+            size = ctx.state.module.AllocateId();
+            ctx.state.module.AddFunction(spv::OpImageQuerySizeLod, ImageViewSizeType(ctx.state, access.image.dimension), size, LoadSampledImageDescriptor(ctx.state, access.mem.resource, access.slot), ConstantU32(ctx.state, 0u));
+        }
+        const auto extent = ctx.state.module.AllocateId();
+        ctx.state.module.AddFunction(spv::OpCompositeExtract, TypeU32(ctx.state), extent, size, index);
+        return Binary(ctx.state, spv::OpFDiv, TypeF32(ctx.state), ConstantF32(ctx.state, 0x3f000000u), Unary(ctx.state, spv::OpConvertUToF, TypeF32(ctx.state), extent));
+    };
+    auto x = component(0u);
     if (components == 1u) {
         return x;
     }
-    auto y = AddressF32(ctx, access, first + 1u);
+    auto y = component(1u);
     if (cube) {
         x = CubeAxis(ctx.state, x);
         y = CubeAxis(ctx.state, y);
     }
     const auto result = ctx.state.module.AllocateId();
     if (components == 3u) {
-        auto z = AddressF32(ctx, access, first + 2u);
+        auto z = component(2u);
         if (cube) {
             z = CubeLayer(ctx.state, z);
         }
@@ -845,7 +859,7 @@ void EmitQueryLodOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access) {
     }
     state.module.EmitCapability(spv::CapabilityImageQuery);
     const auto sampled = MakeSampledImage(state, access.mem.resource, access.mem.sampler, access.slot);
-    const auto coord = CoordF32(ctx, access, 0, RdnaImageDimensionInfoFor(access.image.dimension).spatialComponents, AddressDimension(access).spatialComponents);
+    const auto coord = CoordF32(ctx, access, 0, RdnaImageDimensionInfoFor(access.image.dimension).spatialComponents, AddressDimension(access).spatialComponents, true);
     const auto lod = state.module.AllocateId();
     state.module.AddFunction(spv::OpImageQueryLod, TypeF32Vector(state, 2), lod, sampled, coord);
     std::uint32_t values[4] = {ConstantU32(state, 0), ConstantU32(state, 0), ConstantU32(state, 0), ConstantU32(state, 0)};
@@ -969,7 +983,7 @@ SampleSetup MakeSampleSetup(SpirvValueEmitContext& ctx, const ImageEmitAccess& a
     if (!filtered && ImageConversionFormat(access.image).type == SpirvFormatComponentType::Float) {
         ctx.Fail(access.inst, "samples or gathers a converted float image, which needs filtering in the shader and is not implemented");
     }
-    const auto coord = CoordF32(ctx, access, layout.coord, dimensionInfo.coordinateComponents, AddressDimension(access).coordinateComponents);
+    const auto coord = CoordF32(ctx, access, layout.coord, dimensionInfo.coordinateComponents, AddressDimension(access).coordinateComponents, true);
     return {dimensionInfo, layout, access.image.numericClass, dref, coord};
 }
 
@@ -1195,7 +1209,8 @@ void EmitEmulatedFilterSample(SpirvValueEmitContext& ctx, const ImageEmitAccess&
     const auto& image = access.image;
     const auto filter = image.emulatedFilter;
     if (access.slot != 0) ctx.Fail(access.inst, "filters a converted image through a bindless image table, which is not implemented");
-    const bool baseOnly = HasFlag(mem, RdnaImageSampleFlagLevelZero) || (filter & EmulatedFilter::SingleLevel) != 0u || EmulatedFilter::Mip(filter) == EmulatedFilter::MipBase;
+    const bool unnormalized = (filter & EmulatedFilter::Unnormalized) != 0u;
+    const bool baseOnly = unnormalized || HasFlag(mem, RdnaImageSampleFlagLevelZero) || (filter & EmulatedFilter::SingleLevel) != 0u || EmulatedFilter::Mip(filter) == EmulatedFilter::MipBase;
     if (!baseOnly && (!HasFlag(mem, RdnaImageSampleFlagLod) || setup.layout.clamp != NoImageComponent)) ctx.Fail(access.inst, "filters a converted image across mip levels without an explicit, unclamped LOD, which is not implemented");
     const bool arrayed = image.dimension == RdnaImageDimension::Dim2DArray;
     if (image.dimension != RdnaImageDimension::Dim2D && !arrayed) ctx.Fail(access.inst, "filters a converted image that is not a 2D or 2D array view, which is not implemented");
@@ -1290,8 +1305,8 @@ void EmitEmulatedFilterSample(SpirvValueEmitContext& ctx, const ImageEmitAccess&
         const auto size = levelSize(level);
         const auto width = Unary(state, spv::OpBitcast, i32, extract(u32, size, 0u));
         const auto height = Unary(state, spv::OpBitcast, i32, extract(u32, size, 1u));
-        auto scaledU = Binary(state, spv::OpFMul, f32, extract(f32, setup.coord, 0u), Unary(state, spv::OpConvertSToF, f32, width));
-        auto scaledV = Binary(state, spv::OpFMul, f32, extract(f32, setup.coord, 1u), Unary(state, spv::OpConvertSToF, f32, height));
+        auto scaledU = unnormalized ? extract(f32, setup.coord, 0u) : Binary(state, spv::OpFMul, f32, extract(f32, setup.coord, 0u), Unary(state, spv::OpConvertSToF, f32, width));
+        auto scaledV = unnormalized ? extract(f32, setup.coord, 1u) : Binary(state, spv::OpFMul, f32, extract(f32, setup.coord, 1u), Unary(state, spv::OpConvertSToF, f32, height));
         if (EmulatedFilter::AddressX(filter) == EmulatedFilter::AddressHalfBorder) scaledU = ext(f32, GLSLstd450FClamp, {scaledU, ConstantF32(state, 0u), Unary(state, spv::OpConvertSToF, f32, width)});
         if (EmulatedFilter::AddressY(filter) == EmulatedFilter::AddressHalfBorder) scaledV = ext(f32, GLSLstd450FClamp, {scaledV, ConstantF32(state, 0u), Unary(state, spv::OpConvertSToF, f32, height)});
         if (!linear) {
@@ -1347,7 +1362,9 @@ void EmitSampleOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, con
         EmitEmulatedFilterSample(ctx, access, setup);
         return;
     }
-    const bool explicitLod = ImageSampleExplicitLod(mem.imageSampleFlags, state.program.Resources().stage);
+    const auto& samplerResources = state.program.Resources().info.samplers;
+    const bool unnormalized = !setup.dref && mem.sampler < samplerResources.size() && samplerResources[mem.sampler].unnormalized;
+    const bool explicitLod = unnormalized || ImageSampleExplicitLod(mem.imageSampleFlags, state.program.Resources().stage);
     std::uint32_t opcode = spv::OpImageSampleImplicitLod;
     if (explicitLod) {
         opcode = setup.dref ? spv::OpImageSampleDrefExplicitLod : spv::OpImageSampleExplicitLod;
@@ -1362,18 +1379,18 @@ void EmitSampleOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, con
     }
     std::uint32_t operandMask = 0;
     std::vector<std::uint32_t> operands;
-    if (HasFlag(mem, RdnaImageSampleFlagDerivative)) {
+    if (!unnormalized && HasFlag(mem, RdnaImageSampleFlagDerivative)) {
         operandMask |= spv::ImageOperandsGradMask;
         operands.push_back(CoordF32(ctx, access, setup.layout.gradX, setup.dimensionInfo.spatialComponents, AddressDimension(access).spatialComponents));
         operands.push_back(CoordF32(ctx, access, setup.layout.gradY, setup.dimensionInfo.spatialComponents, AddressDimension(access).spatialComponents));
     } else if (explicitLod) {
         operandMask |= spv::ImageOperandsLodMask;
-        operands.push_back(HasFlag(mem, RdnaImageSampleFlagLod) ? AddressF32(ctx, access, setup.layout.lod) : ZeroF32(state));
+        operands.push_back(!unnormalized && HasFlag(mem, RdnaImageSampleFlagLod) ? AddressF32(ctx, access, setup.layout.lod) : ZeroF32(state));
     } else if (setup.layout.bias != NoImageComponent) {
         operandMask |= spv::ImageOperandsBiasMask;
         operands.push_back(AddressF32(ctx, access, setup.layout.bias));
     }
-    if (setup.layout.clamp != NoImageComponent) {
+    if (!unnormalized && setup.layout.clamp != NoImageComponent) {
         const auto& capabilities = state.supportedCapabilities;
         if (std::find(capabilities.begin(), capabilities.end(), static_cast<std::uint32_t>(spv::CapabilityMinLod)) == capabilities.end()) ctx.Fail(access.inst, "clamps its LOD, which needs the device's shaderResourceMinLod");
         const auto clamp = AddressF32(ctx, access, setup.layout.clamp);
@@ -1451,7 +1468,28 @@ TableSelection TableSlot(SpirvValueEmitContext& ctx, const IrValue& inst, const 
     return EmitIndirectImageSelector(ctx, image, key);
 }
 
+void EmitConstantSwizzleSample(SpirvValueEmitContext& ctx, const ImageEmitAccess& access) {
+    auto& state = ctx.state;
+    const auto numericClass = access.image.numericClass;
+    const bool gather = access.inst.Opcode() == IrOpcode::ImageGatherRaw;
+    const auto channelValue = [&](std::uint32_t channel) {
+        const bool one = ((access.image.constantSwizzle >> (channel + 1u)) & 1u) != 0u;
+        if (numericClass == IrTextureNumericClass::Float) return ConstantF32(state, one ? 0x3f800000u : 0u);
+        if (numericClass == IrTextureNumericClass::Sint) return ConstantI32(state, one ? 1 : 0);
+        return ConstantU32(state, one ? 1u : 0u);
+    };
+    std::uint32_t channels[4];
+    for (std::uint32_t channel = 0; channel < 4u; channel++) channels[channel] = gather ? channelValue(ImageGatherComponent(EffectiveDmask(access.mem))) : channelValue(channel);
+    const auto value = state.module.AllocateId();
+    state.module.AddFunction(spv::OpCompositeConstruct, ImageVectorType(state, numericClass, 4), value, channels[0], channels[1], channels[2], channels[3]);
+    ctx.Define(access.inst, TableResult(ctx, access, ResultVector(ctx, access, value, numericClass, false, gather)));
+}
+
 void EmitSamplingOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access) {
+    if (access.image.constantSwizzle != 0u && !HasFlag(access.mem, RdnaImageSampleFlagCompare) && access.slot == 0) {
+        EmitConstantSwizzleSample(ctx, access);
+        return;
+    }
     if (access.image.srgbDecode) {
         ctx.Fail(access.inst, "samples or gathers an sRGB image the device cannot sample, which is not implemented");
     }

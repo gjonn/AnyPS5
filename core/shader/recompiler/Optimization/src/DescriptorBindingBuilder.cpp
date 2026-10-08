@@ -206,7 +206,7 @@ UnnormalizedProof ProveUnnormalized(const ShaderInfo& info, const ResourceSnapsh
             continue;
         }
         const auto& sampler = info.samplers[r];
-        const std::uint32_t unsupported = sampler.uses & ~static_cast<std::uint32_t>(SamplerUseExplicitLod);
+        const std::uint32_t unsupported = sampler.uses & ~static_cast<std::uint32_t>(SamplerUseExplicitLod | SamplerUseImplicitLod | SamplerUseGradient);
         if (unsupported != 0u) {
             failUnnormalized(UnnormalizedUseReason(unsupported));
         }
@@ -218,6 +218,12 @@ UnnormalizedProof ProveUnnormalized(const ShaderInfo& info, const ResourceSnapsh
                 continue;
             }
             const auto& image = info.images.at(pair.image);
+            if (image.constantSwizzle != 0u) {
+                continue;
+            }
+            if ((image.emulatedFilter & EmulatedFilter::Enabled) != 0u) {
+                continue;
+            }
             if (image.indirectRoot != ImageResource::NoIndirectImage) {
                 failUnnormalized("samples an image selected at run time");
             }
