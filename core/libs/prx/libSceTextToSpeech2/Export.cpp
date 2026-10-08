@@ -3,6 +3,12 @@
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
 
+namespace {
+
+constexpr std::int32_t SCE_KERNEL_ERROR_EOPNOTSUPP = static_cast<std::int32_t>(0x8002002D);
+
+}
+
 extern "C" {
 
 int APS5_VABI sceTextToSpeech2GetSystemStatus() {
@@ -10,16 +16,39 @@ int APS5_VABI sceTextToSpeech2GetSystemStatus() {
     return 0;
 }
 
+std::int32_t APS5_VABI sceTextToSpeech2Initialize(const void* param) {
+    (void)param;
+    return SCE_KERNEL_ERROR_EOPNOTSUPP;
 }
 
-// GT7-LOCAL-PLACEHOLDER BEGIN
-extern "C" {
-int APS5_VABI sceTextToSpeech2Cancel() { NotImplemented_nid_no_patch(__func__); return 0; }
-int APS5_VABI sceTextToSpeech2Close() { NotImplemented_nid_no_patch(__func__); return 0; }
-int APS5_VABI sceTextToSpeech2GetSpeechStatus() { NotImplemented_nid_no_patch(__func__); return 0; }
-int APS5_VABI sceTextToSpeech2Initialize() { NotImplemented_nid_no_patch(__func__); return 0; }
-int APS5_VABI sceTextToSpeech2Open() { NotImplemented_nid_no_patch(__func__); return 0; }
-int APS5_VABI sceTextToSpeech2Speak() { NotImplemented_nid_no_patch(__func__); return 0; }
-int APS5_VABI sceTextToSpeech2Terminate() { NotImplemented_nid_no_patch(__func__); return 0; }
+int APS5_VABI sceTextToSpeech2Cancel() {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
 }
-// GT7-LOCAL-PLACEHOLDER END
+
+int APS5_VABI sceTextToSpeech2Close() {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceTextToSpeech2GetSpeechStatus() {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceTextToSpeech2Open() {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceTextToSpeech2Speak() {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceTextToSpeech2Terminate() {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+}
