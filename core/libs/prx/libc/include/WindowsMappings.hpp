@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <mutex>
 #include <map>
 #include <memory>
@@ -174,6 +175,15 @@ public:
         if (found == views.end() || !writable(found->second.protection)) return false;
         auto& view = found->second;
         if (view.resident) {
+            if (view.armed) {
+                DWORD previous;
+                if (!VirtualProtect(reinterpret_cast<void*>(base), pageBytes, view.protection, &previous)) fail("resume resident guest write");
+                view.armed = false;
+                view.cleanStreak = 0;
+                view.armAfter = static_cast<std::uint8_t>(std::min(255, view.armAfter * 2));
+                forgetClean(base, base + pageBytes);
+                return true;
+            }
             const auto memory = query(address);
             return memory.State == MEM_COMMIT && writable(memory.Protect & 0xffu);
         }
@@ -279,7 +289,7 @@ public:
             if (found != views.end() && found->second.resident) {
                 const auto run = std::prev(residentRuns.upper_bound(cursor));
                 auto& state = run->second;
-                const auto stop = std::min(end, state.end);
+                const auto stop = nextClean != cleanRanges.end() ? std::min({end, state.end, nextClean->first}) : std::min(end, state.end);
                 const auto firstBit = (cursor - run->first) >> 12;
                 const auto lastBit = (stop - 1 - run->first) >> 12;
                 bool fresh = false;
@@ -303,9 +313,11 @@ public:
                     ULONG_PTR available = capacity - *count;
                     if (available == 0) return true;
                     DWORD granularity = 0;
+                    const auto before = *count;
                     if (GetWriteWatch(clear ? WRITE_WATCH_FLAG_RESET : 0, reinterpret_cast<void*>(cursor), stop - cursor, pages + *count, &available, &granularity) != 0) fail("collect resident guest writes");
                     *count += available;
                     if (*count == capacity) return true;
+                    if (clear && watchResident) armClean(cursor, stop, pages + before, *count - before);
                 }
                 cursor = stop;
             } else if (found != views.end()) {
@@ -379,6 +391,8 @@ private:
         std::uint32_t hostWrites;
         bool resident;
         Physical* slot;
+        std::uint8_t cleanStreak = 0;
+        std::uint8_t armAfter = 4;
     };
     struct Run {
         std::uintptr_t end;
@@ -436,6 +450,7 @@ private:
         const auto start = it->first;
         const auto stop = it->second.end;
         if (at <= start || at >= stop) return;
+        disarm(start, stop);
         DWORD previous;
         if (!VirtualProtect(reinterpret_cast<void*>(start), stop - start, PAGE_READWRITE, &previous)) fail("open resident guest pages");
         const std::vector<unsigned char> bytes(reinterpret_cast<const unsigned char*>(start), reinterpret_cast<const unsigned char*>(stop));
@@ -476,6 +491,7 @@ private:
     void evict(std::map<std::uintptr_t, Run>::iterator run) {
         const auto start = run->first;
         const auto stop = run->second.end;
+        disarm(start, stop);
         DWORD previous;
         if (!VirtualProtect(reinterpret_cast<void*>(start), stop - start, PAGE_READWRITE, &previous)) fail("open resident guest pages");
         const auto section = views.at(start).section;
@@ -494,6 +510,59 @@ private:
         close(window);
         residentRuns.erase(run);
     }
+    static bool armResident() {
+        static const bool enabled = std::getenv("APS5_NO_ARM_RESIDENT") == nullptr;
+        return enabled;
+    }
+
+    void disarm(std::uintptr_t start, std::uintptr_t stop) {
+        for (auto it = views.lower_bound(start); it != views.end() && it->first < stop; ++it) {
+            if (!it->second.armed || !it->second.resident) continue;
+            DWORD previous;
+            if (!VirtualProtect(reinterpret_cast<void*>(it->first), pageBytes, it->second.protection, &previous)) fail("disarm resident guest page");
+            it->second.armed = false;
+            it->second.cleanStreak = 0;
+        }
+        forgetClean(start, stop);
+    }
+
+    void armClean(std::uintptr_t begin, std::uintptr_t end, void* const* written, std::size_t count) {
+        if (!armResident()) return;
+        std::vector<std::uintptr_t> armed;
+        for (auto base = (begin + pageBytes - 1) & ~(pageBytes - 1); base + pageBytes <= end; base += pageBytes) {
+            const auto found = views.find(base);
+            if (found == views.end() || !found->second.resident) continue;
+            auto& view = found->second;
+            const bool dirty = std::any_of(written, written + count, [&](void* page) { const auto at = reinterpret_cast<std::uintptr_t>(page); return at >= base && at < base + pageBytes; });
+            if (dirty) {
+                view.cleanStreak = 0;
+                continue;
+            }
+            if (view.armed || view.cleanStreak < 255) ++view.cleanStreak;
+            if (view.armed || view.cleanStreak < view.armAfter || !writable(view.protection) || view.hostWrites != 0 || view.page->pins != 0) continue;
+            DWORD previous;
+            const DWORD protection = view.protection == PAGE_EXECUTE_READWRITE ? PAGE_EXECUTE_READ : PAGE_READONLY;
+            if (!VirtualProtect(reinterpret_cast<void*>(base), pageBytes, protection, &previous)) fail("arm resident guest write tracking");
+            view.armed = true;
+            armed.push_back(base);
+        }
+        for (const auto base : armed) {
+            std::array<void*, pageBytes / 4096> raced{};
+            ULONG_PTR found = raced.size();
+            DWORD granularity = 0;
+            if (GetWriteWatch(0, reinterpret_cast<void*>(base), pageBytes, raced.data(), &found, &granularity) != 0) fail("recheck armed resident guest writes");
+            auto& view = views.at(base);
+            if (found != 0) {
+                DWORD previous;
+                if (!VirtualProtect(reinterpret_cast<void*>(base), pageBytes, view.protection, &previous)) fail("disarm raced resident guest page");
+                view.armed = false;
+                view.cleanStreak = 0;
+                continue;
+            }
+            rememberClean(base, base + pageBytes);
+        }
+    }
+
     void forgetClean(std::uintptr_t start, std::uintptr_t end) {
         auto it = cleanRanges.lower_bound(start);
         if (it != cleanRanges.begin() && std::prev(it)->second > start) --it;
