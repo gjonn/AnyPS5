@@ -1,5 +1,7 @@
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
 #include "ControlFlow/RequestSerializer.hpp"
+#include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <functional>
 #include <string_view>
@@ -16,6 +18,22 @@ void Driver::reportSkip(const char* kind, const std::string& what) {
     static constexpr std::string_view marker = "\nRecompileRequest:\n";
     std::lock_guard lock(reportedMutex);
     std::string line;
+    {
+        static std::map<std::string, std::uint64_t> counts;
+        static auto lastReport = std::chrono::steady_clock::now();
+        ++counts[std::string(kind) + ": " + what.substr(0, std::min<std::size_t>(what.find('\n'), 120))];
+        const auto now = std::chrono::steady_clock::now();
+        if (now - lastReport > std::chrono::seconds(10)) {
+            lastReport = now;
+            std::vector<std::pair<std::uint64_t, std::string>> sorted;
+            for (const auto& [reason, count] : counts) sorted.emplace_back(count, reason);
+            std::sort(sorted.rbegin(), sorted.rend());
+            std::string text = "[skips] by reason (10 s):";
+            for (std::size_t i = 0; i < std::min<std::size_t>(sorted.size(), 8); ++i) text += " " + std::to_string(sorted[i].first) + "x {" + sorted[i].second + "}";
+            std::fprintf(stderr, "%s\n", text.c_str());
+            counts.clear();
+        }
+    }
     static bool announced = false;
     if (!announced) {
         announced = true;

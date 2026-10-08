@@ -662,6 +662,15 @@ std::vector<ImageResource> ResourceMaterializer::RuntimeImageModes(const ImageRe
             volume.dimension = RdnaImageDimension::Dim3D;
             modes.push_back(volume);
         }
+        if (image.dimension == RdnaImageDimension::Dim1D) {
+            auto planar = mode;
+            planar.dimension = RdnaImageDimension::Dim2D;
+            modes.push_back(planar);
+            planar.dimension = RdnaImageDimension::Dim2DArray;
+            modes.push_back(planar);
+            planar.cube = true;
+            modes.push_back(planar);
+        }
         if (image.dimension == RdnaImageDimension::Dim1DArray || image.dimension == RdnaImageDimension::Dim2DArray || image.dimension == RdnaImageDimension::Dim2DMsaaArray) {
             auto plain = mode;
             plain.dimension = image.dimension == RdnaImageDimension::Dim1DArray ? RdnaImageDimension::Dim1D : image.dimension == RdnaImageDimension::Dim2DArray ? RdnaImageDimension::Dim2D : RdnaImageDimension::Dim2DMsaa;
@@ -769,7 +778,7 @@ std::uint32_t ResourceMaterializer::RuntimeImageMode(const ImageResource& image,
         }
         if (mode.numericClass == decoded.numericClass && mode.dimension == decoded.dimension && mode.conversionFormat == decoded.conversionFormat && mode.packedFormat == decoded.packedFormat && mode.cube == decoded.cube && mode.depthBits == decoded.depthBits && mode.depthUnorm16 == decoded.depthUnorm16 && mode.srgbDecode == decoded.srgbDecode) return index;
     }
-    if (image.dimension == RdnaImageDimension::Dim1D && decoded.dimension != RdnaImageDimension::Dim1D) throw std::runtime_error("image address has too few coordinate components");
+    if (image.dimension == RdnaImageDimension::Dim1D && decoded.dimension != RdnaImageDimension::Dim1D) throw std::runtime_error("image address has too few coordinate components (descriptor dimension " + std::to_string(static_cast<int>(decoded.dimension)) + " numeric " + std::to_string(static_cast<int>(decoded.numericClass)) + " conversion " + std::to_string(static_cast<int>(decoded.conversionFormat)) + " packed " + std::to_string(static_cast<int>(decoded.packedFormat)) + " cube " + std::to_string(decoded.cube) + " depthBits " + std::to_string(decoded.depthBits) + " srgb " + std::to_string(decoded.srgbDecode) + " emulated " + std::to_string(emulated) + " modes " + std::to_string(modes.size()) + " pc " + std::to_string(image.firstUsePc) + " read " + std::to_string(image.read) + " written " + std::to_string(image.written) + " mip " + std::to_string(static_cast<int>(image.mipMode)) + " class " + std::to_string(static_cast<int>(image.resourceClass)) + " filter " + std::to_string(image.emulatedFilter) + ")");
     throw std::runtime_error("image descriptor is incompatible with the static runtime image interface");
 }
 

@@ -188,12 +188,14 @@ std::uint32_t CubeLayer(SpirvEmitterState& state, std::uint32_t value) {
 std::uint32_t CoordF32(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, std::uint32_t first, std::uint32_t components, std::uint32_t encoded, bool position = false) {
     const bool cube = access.image.cube;
     const auto present = std::min(encoded, components);
-    if (first == NoImageComponent || (encoded < components && (cube || encoded == 0u)) || access.mem.imageAddressComponents < first + present) {
+    const bool padded = cube && encoded == 1u && AddressDimension(access).coordinateComponents == 1u;
+    if (first == NoImageComponent || (encoded < components && ((cube && !padded) || encoded == 0u)) || access.mem.imageAddressComponents < first + present) {
         ctx.Fail(access.inst, "has an image address with too few coordinate components");
     }
     std::uint32_t size = 0;
     const auto component = [&](std::uint32_t index) {
         if (index < present) return AddressF32(ctx, access, first + index);
+        if (padded) return index == 2u ? ZeroF32(ctx.state) : ConstantF32(ctx.state, 0x3fc00000u);
         if (!position || index >= RdnaImageDimensionInfoFor(access.image.dimension).spatialComponents) return ZeroF32(ctx.state);
         if (size == 0u) {
             ctx.state.module.EmitCapability(spv::CapabilityImageQuery);

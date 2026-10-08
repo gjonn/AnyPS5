@@ -7,6 +7,8 @@
 #include "Optimization/ResourceProgram.hpp"
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <set>
 
 namespace AgcDriver::DriverDetail {
 
@@ -73,7 +75,23 @@ std::shared_ptr<const ShaderRecompiler::RecompileResult> Driver::materializeDraw
     phaseTiming.Phase(DrawRowCapture);
 
     timing.Mark("capture_resources");
-    stageCapture.compiled = invocation.Materialize(*capture);
+    try {
+        stageCapture.compiled = invocation.Materialize(*capture);
+    } catch (const std::exception& error) {
+        static std::mutex dumpMutex;
+        static std::set<std::uint64_t> dumped;
+        std::lock_guard dumpLock(dumpMutex);
+        if (dumped.insert(program.binary.codeAddress).second && dumped.size() <= 16) {
+            char name[64];
+            std::snprintf(name, sizeof(name), "skipshader_%llx.bin", static_cast<unsigned long long>(program.binary.codeAddress));
+            if (std::FILE* file = std::fopen(name, "wb")) {
+                std::fwrite(program.binary.code.data(), sizeof(std::uint32_t), program.binary.code.size(), file);
+                std::fclose(file);
+            }
+            std::fprintf(stderr, "[skipshader] 0x%llx stage %d: %.300s\n", static_cast<unsigned long long>(program.binary.codeAddress), static_cast<int>(program.binary.stage), error.what());
+        }
+        throw;
+    }
     timing.Mark("materialize");
     phaseTiming.Phase(DrawRowRecompile);
     return stageCapture.compiled;
