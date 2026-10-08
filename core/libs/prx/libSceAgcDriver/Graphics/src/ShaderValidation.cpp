@@ -22,6 +22,7 @@ struct Decoration {
     bool patch = false;
     bool perPrimitive = false;
     bool perVertex = false;
+    bool secondIndex = false;
 };
 
 struct Variable {
@@ -310,7 +311,11 @@ Module Inspect(const CompiledShader& compiled, const State& state, const VkPhysi
                     Require(!field->has_value(), "duplicate SPIR-V decoration");
                     *field = instruction[3];
                 }
-                Require(kind != spv::DecorationComponent && kind != spv::DecorationIndex && kind != spv::DecorationStream && kind != spv::DecorationXfbBuffer && kind != spv::DecorationXfbStride, "unsupported shader interface packing or transform feedback");
+                if (kind == spv::DecorationIndex) {
+                    Require(count == 4 && instruction[3] == 1u, "malformed or unsupported blend source index");
+                    decoration.secondIndex = true;
+                }
+                Require(kind != spv::DecorationComponent && kind != spv::DecorationStream && kind != spv::DecorationXfbBuffer && kind != spv::DecorationXfbStride, "unsupported shader interface packing or transform feedback");
                 if (kind == spv::DecorationPatch) decoration.patch = true;
                 if (kind == spv::DecorationPerPrimitiveEXT) decoration.perPrimitive = true;
                 if (kind == spv::DecorationPerVertexKHR) {
@@ -419,7 +424,11 @@ Module Inspect(const CompiledShader& compiled, const State& state, const VkPhysi
                 Require(!decoration.perPrimitive, "per-primitive user outputs are unsupported");
                 Require(!decoration.builtin, "shader input cannot have both location and built-in decorations");
                 auto& locations = variable.storage == spv::StorageClassInput ? module.inputs : module.outputs;
-                module.AddLocations(locations, *decoration.location, typeId, decoration.patch);
+                if (decoration.secondIndex) {
+                    Require(variable.storage == spv::StorageClassOutput && *decoration.location == 0u && state.reversedBlend != 0u, "a second blend source is only bound for reversed blending into the first color target");
+                } else {
+                    module.AddLocations(locations, *decoration.location, typeId, decoration.patch);
+                }
             } else if (decoration.builtin) {
                 module.Builtin(*decoration.builtin, typeId, variable.storage, stage, subgroup);
             } else {

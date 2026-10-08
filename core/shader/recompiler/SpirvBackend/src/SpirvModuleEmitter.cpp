@@ -1116,7 +1116,48 @@ void EmitSetAttribute(SpirvValueEmitContext& ctx, const IrValue& inst) {
         auto value = ExportVector(ctx, data, exp, uintOutput);
         if (state.program.Resources().stage == IrShaderStage::Pixel && exp.kind == ExportTargetKind::Mrt && exp.index < state.inputInfo.pixel->targetExportMapping.size()) {
             const auto& mapping = state.inputInfo.pixel->targetExportMapping.at(exp.index);
-            if (!mapping.IsIdentity()) {
+            if (exp.index == 0u && state.dualSourceVariable != 0u) {
+                const auto blend = state.inputInfo.pixel->reversedBlend;
+                const auto f32 = TypeF32(state);
+                const auto one = ConstantF32(state, 0x3f800000u);
+                std::array<std::uint32_t, 4> components{};
+                for (std::uint32_t c = 0; c < 4u; ++c) {
+                    components[c] = state.module.AllocateId();
+                    state.module.AddFunction(spv::OpCompositeExtract, f32, components[c], value, c);
+                }
+                const auto factor = [&](std::uint32_t code, std::uint32_t component) -> std::uint32_t {
+                    const auto minus = [&](std::uint32_t x) {
+                        const auto id = state.module.AllocateId();
+                        state.module.AddFunction(spv::OpFSub, f32, id, one, x);
+                        return id;
+                    };
+                    switch (code) {
+                        case 0: return ConstantF32(state, 0u);
+                        case 1: return one;
+                        case 2: return components[component];
+                        case 3: return minus(components[component]);
+                        case 4: return components[3];
+                        default: return minus(components[3]);
+                    }
+                };
+                std::array<std::uint32_t, 4> scaled{};
+                std::array<std::uint32_t, 4> keep{};
+                for (std::uint32_t c = 0; c < 4u; ++c) {
+                    const auto e = mapping.Map(c);
+                    const auto shift = e == 3u ? 10u : 0u;
+                    scaled[c] = state.module.AllocateId();
+                    state.module.AddFunction(spv::OpFMul, f32, scaled[c], components[e], factor((blend >> shift) & 0x1fu, e));
+                    const auto destination = factor((blend >> (shift + 5u)) & 0x1fu, e);
+                    keep[c] = state.module.AllocateId();
+                    state.module.AddFunction(spv::OpFSub, f32, keep[c], one, destination);
+                }
+                const auto factors = state.module.AllocateId();
+                state.module.AddFunction(spv::OpCompositeConstruct, vectorType, factors, keep[0], keep[1], keep[2], keep[3]);
+                state.module.AddFunction(spv::OpStore, state.dualSourceVariable, factors);
+                const auto mapped = state.module.AllocateId();
+                state.module.AddFunction(spv::OpCompositeConstruct, vectorType, mapped, scaled[0], scaled[1], scaled[2], scaled[3]);
+                value = mapped;
+            } else if (!mapping.IsIdentity()) {
                 const auto mapped = state.module.AllocateId();
                 state.module.AddFunction(spv::OpVectorShuffle, vectorType, mapped, value, value, mapping.Map(0), mapping.Map(1), mapping.Map(2), mapping.Map(3));
                 value = mapped;

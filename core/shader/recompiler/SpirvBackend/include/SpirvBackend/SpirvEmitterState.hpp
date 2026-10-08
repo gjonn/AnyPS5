@@ -147,6 +147,7 @@ struct SpirvEmitterState {
     std::uint32_t layerVariable = 0;
     std::uint32_t viewportIndexVariable = 0;
     std::uint32_t depthVariable = 0;
+    std::uint32_t dualSourceVariable = 0;
     std::uint32_t sampleMaskVariable = 0;
     std::vector<SpirvInputBinding> inputs;
     std::vector<SpirvOutputBinding> outputs;

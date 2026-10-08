@@ -124,6 +124,7 @@ ShaderStageInputInfo BuildShaderStageInputInfo(ShaderStageKind stage, const Gues
             pixelStorage.targetOutputMode[i] = pixel.targetOutputMode[i];
             pixelStorage.targetExportMapping[i].packed = pixel.targetExportMapping[i];
         }
+        pixelStorage.reversedBlend = pixel.reversedBlend;
         pixelStorage.psPosX = pixel.posX;
         pixelStorage.psPosY = pixel.posY;
         pixelStorage.psPosZ = pixel.posZ;

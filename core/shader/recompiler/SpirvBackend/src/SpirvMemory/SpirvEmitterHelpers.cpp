@@ -369,6 +369,12 @@ void DefineOutputs(SpirvEmitterState& state) {
             const auto type = uintOutput ? TypeU32Vector(state, 4u) : TypeF32Vector(state, 4u);
             binding.variableId = DefineInterfaceVariable(state, type, spv::StorageClassOutput, binding.debugName.c_str());
             state.module.AddAnnotation(spv::OpDecorate, binding.variableId, spv::DecorationLocation, binding.location);
+            if (binding.kind == StageOutputKind::Mrt && state.program.Resources().stage == IrShaderStage::Pixel && binding.index == 0u && PixelInfo(state).reversedBlend != 0u) {
+                if (uintOutput) throw std::runtime_error("blending into a reversed integer color target");
+                state.dualSourceVariable = DefineInterfaceVariable(state, type, spv::StorageClassOutput, "out_mrt_0_blend");
+                state.module.AddAnnotation(spv::OpDecorate, state.dualSourceVariable, spv::DecorationLocation, 0u);
+                state.module.AddAnnotation(spv::OpDecorate, state.dualSourceVariable, spv::DecorationIndex, 1u);
+            }
             break;
         }
         }

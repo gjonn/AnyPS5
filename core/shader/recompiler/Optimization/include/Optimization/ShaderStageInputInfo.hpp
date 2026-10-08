@@ -170,6 +170,7 @@ struct ShaderPixelInputInfo {
     }();
     std::uint8_t targetOutputMode[8] = {};
     std::array<ShaderColorComponentMapping, 8> targetExportMapping = {};
+    std::uint32_t reversedBlend = 0;
     std::uint32_t scratchSizeDwords = 0;
     bool psPosX = false;
     bool psPosY = false;

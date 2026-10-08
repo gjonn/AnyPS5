@@ -128,6 +128,7 @@ struct ShaderPixelStageInfo {
     ConservativeZExport conservativeZExport;
     std::array<std::uint8_t, 8> targetOutputMode;
     std::array<std::uint8_t, 8> targetExportMapping;
+    std::uint32_t reversedBlend = 0;
 };
 
 struct ShaderVertexBufferResource {
