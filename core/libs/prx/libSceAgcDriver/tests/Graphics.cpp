@@ -507,6 +507,18 @@ void DisabledColorTests() {
     Require(!depthOnly.hasColorTarget && depthOnly.depth && depthOnly.depthTest && depthOnly.depthWrite && depthOnly.renderExtent.height == 64, "COLOR_INVALID discarded a depth-only draw");
 }
 
+void ReversedComponentOrderTests() {
+    for (const auto& [swap, mapping] : {std::pair{2u, 0x1bu}, std::pair{3u, 0x93u}}) {
+        auto queue = makeState();
+        queue.context[0x31c] = (queue.context[0x31c] & ~(3u << 11u)) | (swap << 11u);
+        const auto state = AgcDriver::Graphics::DecodeState(queue);
+        Require(state.colors.size() == 1 && state.colors[0].format == VK_FORMAT_R8G8B8A8_UNORM && state.colors[0].componentMapping == mapping, "an 8_8_8_8 target with a reversed component order did not map exports onto RGBA8");
+        Require(AgcDriver::Graphics::ExportMappings(state)[0] == mapping && state.blends[0].colorWriteMask == 0xfu, "a reversed 8_8_8_8 target did not write all four channels through its export mapping");
+        queue.context[0x1e0] = 0x40010001u;
+        expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "reversed component order");
+    }
+}
+
 void CompactedExportTests() {
     alignas(256) static std::array<std::byte, 1024> slotFourMemory{};
     const auto slotFour = reinterpret_cast<std::uintptr_t>(slotFourMemory.data());
@@ -2217,6 +2229,7 @@ int main() {
         conservativeZExportTests();
         DisabledColorTests();
         CompactedExportTests();
+        ReversedComponentOrderTests();
         metadataPassTests();
         ShaderStageTests();
         PixelInputLayoutTests();
