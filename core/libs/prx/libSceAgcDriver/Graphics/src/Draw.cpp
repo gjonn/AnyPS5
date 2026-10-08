@@ -915,6 +915,8 @@ DrawInputs prepareDrawInputs(const Context& context, const State& state, const P
         fetches.push_back({address, address + bytes, (fields[1] >> 16u) & 0x3fffu, attribute.fetchIndex, DecodeVertexFormat(attribute).alignment});
     }
     const auto plan = PlanVertexCopies(fetches);
+    inputs.vertexBuffers.reserve(plan.copies.size() + std::count_if(shortBuffers.begin(), shortBuffers.end(), [](const auto& buffer) { return buffer != nullptr; }));
+    inputs.vertexHandles.reserve(attributes.size());
     for (const auto& [begin, end] : plan.copies) {
         const auto bytes = static_cast<std::size_t>(end - begin);
         GuestMemory::CheckRange(reinterpret_cast<const void*>(begin), bytes, 1);
@@ -940,7 +942,8 @@ DrawInputs prepareDrawInputs(const Context& context, const State& state, const P
 // over the target's pages, the DCC key scan of TextureClearKeys, then UnchangedSince), with the
 // [draws] target-lookup accounting. `lookup` makes (or finds) the image; DrawWithRecipe refreshes
 // the stored object instead.
-std::shared_ptr<StorageTexture> refreshResidentTarget(const Context& context, const State& state, const ColorTarget& color, DrawOutcome& outcome, bool profile, const std::function<std::shared_ptr<StorageTexture>()>& lookup) {
+template<typename Lookup>
+std::shared_ptr<StorageTexture> refreshResidentTarget(const Context& context, const State& state, const ColorTarget& color, DrawOutcome& outcome, bool profile, Lookup&& lookup) {
     const auto lookupStart = std::chrono::steady_clock::now();
     const auto walkedBefore = profile ? GuestMemory::ThreadCollectedBytes() : 0;
     std::shared_ptr<StorageTexture> resident;
