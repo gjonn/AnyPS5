@@ -53,6 +53,7 @@ struct ColorTarget {
     std::uint32_t depth = 1;
     std::uint32_t depthSlice = 0;
     std::uint32_t layers = 1;
+    std::uint32_t arraySize = 1;
     std::uint32_t exportIndex = 0;
 };
 

@@ -616,7 +616,25 @@ State DecodeState(const QueueState& queue) {
             if (((exportedMask >> ((mapping >> (2u * component)) & 3u)) & 1u) != 0) state.colorWriteMask |= 1u << component;
         }
         state.blendEnable = (blend >> 30u) & 1u;
-        if (state.blendEnable && (mapping == 0x1bu || mapping == 0x93u)) throw std::runtime_error("AGC graphics: blending into a color target with a reversed component order is not implemented DBG blend 0x" + [&] { char b[16]; std::snprintf(b, sizeof(b), "%08x", blend); return std::string(b); }() + " mapping " + std::to_string(mapping) + " format " + std::to_string(color.format) + " mask " + std::to_string(exportedMask));
+        if (state.blendEnable && (mapping == 0x1bu || mapping == 0x93u)) {
+            Require((read(cx, 0x31c + slot * 0xfu) & 0x10000u) == 0, "blend bypass conflicts with enabled blending");
+            Require(color.exportIndex == 0, "blending into a color target with a reversed component order is only implemented for the first export");
+            const auto alpha = (blend & 0x20000000u) != 0 ? blend >> 16u : blend;
+            const auto colorOp = (blend >> 5u) & 7u;
+            Require(colorOp == ((alpha >> 5u) & 7u), "blending into a color target with a reversed component order needs one operation for color and alpha");
+            std::array<std::uint32_t, 4> factors{blend & 0x1fu, (blend >> 8u) & 0x1fu, alpha & 0x1fu, (alpha >> 8u) & 0x1fu};
+            for (const auto factor : factors) Require(factor <= 5u, "blending into a color target with a reversed component order reads a destination or constant factor, which is not implemented");
+            if (colorOp == 2u || colorOp == 3u) factors = {1u, 0u, 1u, 0u};
+            result.reversedBlend = 0x80000000u | factors[0] | (factors[1] << 5u) | (factors[2] << 10u) | (factors[3] << 15u);
+            state.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR;
+            state.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            state.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
+            state.colorBlendOp = blendOp(colorOp);
+            state.alphaBlendOp = state.colorBlendOp;
+            result.blends[color.exportIndex] = state;
+            continue;
+        }
         if (state.blendEnable) {
             Require((read(cx, 0x31c + slot * 0xfu) & 0x10000u) == 0, "blend bypass conflicts with enabled blending");
             state.srcColorBlendFactor = blendFactor(blend & 0x1fu);
@@ -638,6 +656,10 @@ State DecodeState(const QueueState& queue) {
     if (!result.colors.empty()) result.blend = result.blends[result.colors.front().exportIndex];
     APS5_LOG_OUT_DEBUG("DecodeState done colorTarget=%u render=%ux%u topology=%u", result.hasColorTarget ? 1u : 0u, result.renderExtent.width, result.renderExtent.height, static_cast<unsigned>(result.topology));
     return result;
+}
+
+std::uint32_t ReversedBlend(const State& state) {
+    return state.reversedBlend;
 }
 
 std::array<std::uint8_t, 8> ExportMappings(const State& state) {
@@ -676,13 +698,13 @@ GuestTextureResource SurfaceForTarget(const ColorTarget& color) {
     surface.baseAddress = chain ? color.surfaceAddress : color.address;
     surface.width = chain ? color.surfaceExtent.width : color.extent.width;
     surface.height = chain ? color.surfaceExtent.height : color.extent.height;
-    surface.depthOrLastArray = color.depth - 1u;
+    surface.depthOrLastArray = color.arraySize > 1u ? color.arraySize - 1u : color.depth - 1u;
     surface.baseArray = 0;
     surface.mipCount = color.mipCount;
     surface.baseLevel = 0;
     surface.lastLevel = color.mipCount - 1;
     surface.tileMode = ColorTextureTileMode(color.tileMode);
-    surface.dimension = color.depth > 1 ? TextureDimension::k3D : TextureDimension::k2D;
+    surface.dimension = color.depth > 1 ? TextureDimension::k3D : color.arraySize > 1u ? TextureDimension::k2DArray : TextureDimension::k2D;
     surface.format = GuestFormatFor(color.format, color.elementBytes);
     surface.dstSelX = 4;
     surface.dstSelY = 5;
@@ -725,8 +747,11 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
         Require(slice < color.depth && lastSlice >= slice, "the color view slices are outside the 3D surface");
         color.depthSlice = slice;
         color.layers = std::min(lastSlice + 1u, color.depth) - slice;
-    } else {
-        Require(slice == lastSlice, "color views of several array slices are unsupported");
+    } else if (slice != lastSlice && (read(cx, 0x207) & LayerExports) != 0) {
+        color.arraySize = (attrib3 & 0x1fffu) + 1u;
+        Require(lastSlice < color.arraySize && lastSlice > slice, "the color view slices are outside the array surface");
+        color.depthSlice = slice;
+        color.layers = lastSlice + 1u - slice;
     }
     color.extent = {((attrib2 >> 14u) & 0x3fffu) + 1u, (attrib2 & 0x3fffu) + 1u};
     color.elementBytes = decoded.elementBytes;
@@ -746,7 +771,7 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
     const auto high = read(cx, 0x390 + slot);
     Require((high & ~0xffu) == 0, "invalid color address extension");
     color.surfaceAddress = (static_cast<std::uint64_t>(high) << 40u) | (static_cast<std::uint64_t>(read(cx, 0x318 + stride)) << 8u);
-    if (slice != 0 && !volume) color.surfaceAddress += slice * ComputeSurfaceSize(ComputeElementMipLayout(ColorTextureTileMode(color.tileMode), color.elementBytes, color.surfaceExtent.width, color.surfaceExtent.height, color.mipCount), 1);
+    if (slice != 0 && !volume && color.arraySize == 1u) color.surfaceAddress += slice * ComputeSurfaceSize(ComputeElementMipLayout(ColorTextureTileMode(color.tileMode), color.elementBytes, color.surfaceExtent.width, color.surfaceExtent.height, color.mipCount), 1);
     color.address = color.surfaceAddress + mipOffset;
     color.bytes = colorLayout.Bytes();
     GuestMemory::CheckRange(reinterpret_cast<const void*>(color.address), color.bytes, colorLayout.Alignment(), true);
@@ -770,7 +795,7 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
             }
         }
     }
-    if (volume && (color.tileMode == ColorTileMode::RenderTarget || color.tileMode == ColorTileMode::Standard4KB)) {
+    if ((volume || color.arraySize > 1u) && (color.tileMode == ColorTileMode::RenderTarget || color.tileMode == ColorTileMode::Standard4KB)) {
         color.bytes = DescribeSurface(SurfaceForTarget(color)).guestBytes;
         GuestMemory::CheckRange(reinterpret_cast<const void*>(color.address), color.bytes, colorLayout.Alignment(), true);
     }
