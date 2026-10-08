@@ -719,7 +719,7 @@ StorageTexture::StorageTexture(const Context& context, TextureDetiler& detiler, 
         {
             VkFormatProperties properties{};
             context.formatProperties(context.physical, vkFormat, &properties);
-            attachable = (descriptor.dimension == TextureDimension::k2D || descriptor.dimension == TextureDimension::k3D) && (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0;
+            attachable = (descriptor.dimension == TextureDimension::k2D || descriptor.dimension == TextureDimension::k2DArray || descriptor.dimension == TextureDimension::k3D) && (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0;
             if (attachable) imageInfo.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         }
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
