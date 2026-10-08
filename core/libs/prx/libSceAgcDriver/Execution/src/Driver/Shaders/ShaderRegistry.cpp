@@ -1,3 +1,6 @@
+#include <cstdio>
+#include <mutex>
+#include <set>
 #include "prx/libc/include/general/LogMacros.hpp"
 #include "ControlFlow/GraphBuilder.hpp"
 #include "ControlFlow/Structurizer.hpp"
@@ -290,7 +293,19 @@ void BuildRegisteredAbiKey(const QueueState& state, const VulkanDevice& device, 
     }
 }
 
-std::vector<PreparedShaders::Entry> PrepareRegistered(const ShaderSnapshot& snapshot, const VulkanDevice& device, const QueueState& state, bool registration) {
+std::shared_ptr<const ShaderRecompiler::SourceHandle> TryPrepareShader(const ShaderRecompiler::RecompileRequest& request) {
+    try {
+        return ShaderRecompiler::PrepareShader(request);
+    } catch (const std::exception& error) {
+        static std::mutex reportMutex;
+        static std::set<std::uint64_t> reported;
+        std::lock_guard lock(reportMutex);
+        if (reported.insert(request.shader.codeAddress).second) std::fprintf(stderr, "[prepare] shader 0x%llx left unprepared: %.200s\n", static_cast<unsigned long long>(request.shader.codeAddress), error.what());
+        return nullptr;
+    }
+}
+
+std::vector<PreparedShaders::Entry> PrepareRegisteredImpl(const ShaderSnapshot& snapshot, const VulkanDevice& device, const QueueState& state, bool registration) {
     using Stage = ShaderRecompiler::ShaderStage;
     const auto header = ReadHeader(snapshot);
     std::uint32_t programRegister;
@@ -356,7 +371,7 @@ std::vector<PreparedShaders::Entry> PrepareRegistered(const ShaderSnapshot& snap
     std::vector<PreparedShaders::Entry> entries;
     const auto append = [&] {
         PerformanceTimer timing("Shader.PrepareArtifact");
-        entries.push_back({codeOffset, ShaderRecompiler::PrepareShader(request)});
+        if (auto handle = TryPrepareShader(request)) entries.push_back({codeOffset, std::move(handle)});
     };
     append();
     if (compute) {
@@ -367,6 +382,18 @@ std::vector<PreparedShaders::Entry> PrepareRegistered(const ShaderSnapshot& snap
         append();
     }
     return entries;
+}
+
+std::vector<PreparedShaders::Entry> PrepareRegistered(const ShaderSnapshot& snapshot, const VulkanDevice& device, const QueueState& state, bool registration) {
+    try {
+        return PrepareRegisteredImpl(snapshot, device, state, registration);
+    } catch (const std::exception& error) {
+        static std::mutex reportMutex;
+        static std::set<std::uint64_t> reported;
+        std::lock_guard lock(reportMutex);
+        if (reported.insert(snapshot.codeAddress).second) std::fprintf(stderr, "[prepare] shader 0x%llx left unprepared: %.200s\n", static_cast<unsigned long long>(snapshot.codeAddress), error.what());
+        return {};
+    }
 }
 
 }
@@ -415,7 +442,8 @@ std::vector<PreparedGraphicsStage> PrepareGraphicsStages(const DrawDecode& decod
         }
         if (handle == nullptr) {
             PerformanceTimer timing("Shader.PrepareArtifact");
-            handle = ShaderRecompiler::PrepareShader(request);
+            handle = TryPrepareShader(request);
+            if (handle == nullptr) return {};
         }
         const auto bytes = handle->artifact->bindings.pushConstantSizeBytes;
         require(bytes <= capacity - pushOffset, "prepared graphics stages exceed the push constant block");
