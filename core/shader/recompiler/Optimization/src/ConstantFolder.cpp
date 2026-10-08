@@ -194,6 +194,15 @@ void collectUses(IrValue& value, std::vector<IrUse>& uses) {
     }
 }
 
+constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 2> ancillaryRanges {{{8u, 4u}, {16u, 13u}}};
+
+const std::pair<std::uint32_t, std::uint32_t>* findAncillaryRange(std::uint32_t offset, std::uint32_t count) {
+    const auto range = std::ranges::find_if(ancillaryRanges, [&](const auto& candidate) {
+        return count != 0u && offset >= candidate.first && count <= candidate.second && offset - candidate.first <= candidate.second - count;
+    });
+    return range == ancillaryRanges.end() ? nullptr : &*range;
+}
+
 bool lowerPackedAncillary(IrProgram& program, IrBuilder& builder, IrValue& ancillary) {
     auto& kind = resolveArg(ancillary, 0);
     if (!isImmediate(kind, IrType::U32) || static_cast<StageInputKind>(kind.ImmediateU32()) != StageInputKind::PackedAncillary) {
@@ -213,7 +222,6 @@ bool lowerPackedAncillary(IrProgram& program, IrBuilder& builder, IrValue& ancil
         }
         return *fields[index];
     };
-    constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 2> ranges {{{8u, 4u}, {16u, 13u}}};
     bool lowered = false;
     std::vector<IrUse> whole;
     for (const IrUse& use : uses) {
@@ -228,14 +236,11 @@ bool lowerPackedAncillary(IrProgram& program, IrBuilder& builder, IrValue& ancil
             whole.push_back(use);
             continue;
         }
-        const auto range = std::ranges::find_if(ranges, [&](const auto& candidate) {
-            return offset.ImmediateU32() >= candidate.first && count.ImmediateU32() <= candidate.second &&
-                   offset.ImmediateU32() - candidate.first <= candidate.second - count.ImmediateU32();
-        });
-        if (range == ranges.end()) {
+        const auto* range = findAncillaryRange(offset.ImmediateU32(), count.ImmediateU32());
+        if (range == nullptr) {
             continue;
         }
-        user.ReplaceArgument(0, &field(static_cast<std::size_t>(range - ranges.begin())));
+        user.ReplaceArgument(0, &field(static_cast<std::size_t>(range - ancillaryRanges.data())));
         user.ReplaceArgument(1, &builder.Constant(offset.ImmediateU32() - range->first));
         lowered = true;
     }
@@ -255,6 +260,36 @@ bool lowerPackedAncillary(IrProgram& program, IrBuilder& builder, IrValue& ancil
     for (const IrUse& use : whole) {
         use.user->ReplaceArgument(use.operand, &packed);
     }
+    return true;
+}
+
+IrValue* rebuiltAncillaryField(IrValue& shift, std::uint32_t amount, StageInputKind kind) {
+    if (shift.Opcode() != IrOpcode::ShiftLeftLogical32) {
+        return nullptr;
+    }
+    auto& field = resolveArg(shift, 0);
+    auto& shiftAmount = resolveArg(shift, 1);
+    if (field.Opcode() != IrOpcode::GetBuiltin || !isImmediate(shiftAmount, IrType::U32) || shiftAmount.ImmediateU32() != amount) {
+        return nullptr;
+    }
+    auto& fieldKind = resolveArg(field, 0);
+    return isImmediate(fieldKind, IrType::U32) && static_cast<StageInputKind>(fieldKind.ImmediateU32()) == kind ? &field : nullptr;
+}
+
+bool lowerRebuiltAncillaryExtract(IrBuilder& builder, IrValue& extract) {
+    auto& word = resolveArg(extract, 0);
+    auto& offset = resolveArg(extract, 1);
+    auto& count = resolveArg(extract, 2);
+    if (word.Opcode() != IrOpcode::BitwiseOr32 || !isImmediate(offset, IrType::U32) || !isImmediate(count, IrType::U32)) {
+        return false;
+    }
+    const std::array<IrValue*, 2> fields {rebuiltAncillaryField(resolveArg(word, 0), 8u, StageInputKind::SampleId), rebuiltAncillaryField(resolveArg(word, 1), 16u, StageInputKind::Layer)};
+    const auto* range = findAncillaryRange(offset.ImmediateU32(), count.ImmediateU32());
+    if (fields[0] == nullptr || fields[1] == nullptr || range == nullptr) {
+        return false;
+    }
+    extract.ReplaceArgument(0, fields[static_cast<std::size_t>(range - ancillaryRanges.data())]);
+    extract.ReplaceArgument(1, &builder.Constant(offset.ImmediateU32() - range->first));
     return true;
 }
 
@@ -289,6 +324,9 @@ bool ConstantFolder::tryFoldValue(IrProgram& program, IrValue& value) const {
             auto& source = resolveArg(value, 0);
             auto& offset = resolveArg(value, 1);
             auto& count = resolveArg(value, 2);
+            if (lowerRebuiltAncillaryExtract(builder, value)) {
+                return true;
+            }
             if (source.Opcode() == IrOpcode::ShiftLeftLogical32 && isImmediate(offset, IrType::U32) && isImmediate(count, IrType::U32)) {
                 auto& shift = resolveArg(source, 1);
                 if (isImmediate(shift, IrType::U32) && shift.ImmediateU32() < 32u && offset.ImmediateU32() <= shift.ImmediateU32() && count.ImmediateU32() <= shift.ImmediateU32() - offset.ImmediateU32()) {

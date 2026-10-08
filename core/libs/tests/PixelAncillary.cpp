@@ -40,6 +40,28 @@ static void Extract(IrOpcode opcode, std::uint32_t offset, std::uint32_t count, 
     Require(user.Argument(1)->Resolve()->ImmediateU32() == fieldOffset);
     Require(user.Argument(2)->Resolve()->ImmediateU32() == count);
 }
+static void FoldedLater(std::uint32_t offset, std::uint32_t count, StageInputKind kind, std::uint32_t fieldOffset) {
+    IrProgram program;
+    program.Resources().stage = IrShaderStage::Pixel;
+    program.Resources().resourceTrackingComplete = true;
+    auto& block = program.CreateBlock();
+    program.SetEntryBlock(block);
+    program.BlockOrder().push_back(&block);
+    IrBuilder builder(program);
+    builder.SetInsertionPoint(block);
+    auto& ancillary = builder.Emit(IrOpcode::GetBuiltin, IrType::U32, {&builder.Constant(static_cast<std::uint32_t>(StageInputKind::PackedAncillary)), &builder.Constant(0u)});
+    auto& foldedOffset = builder.Emit(IrOpcode::BitwiseAnd32, IrType::U32, {&builder.Constant(offset), &builder.Constant(31u)});
+    auto& foldedCount = builder.Emit(IrOpcode::UMin32, IrType::U32, {&builder.Constant(count), &builder.Constant(32u - offset)});
+    auto& user = builder.Emit(IrOpcode::BitFieldUExtract, IrType::U32, {&ancillary, &foldedOffset, &foldedCount});
+    static_cast<void>(builder.Emit(IrOpcode::ReferenceU32, IrType::Void, {&user}));
+    static_cast<void>(builder.Emit(IrOpcode::Return, IrType::Void, {}));
+    Lower(program);
+    const IrValue* field = user.Argument(0)->Resolve();
+    Require(field->Opcode() == IrOpcode::GetBuiltin);
+    Require(static_cast<StageInputKind>(field->Argument(0)->Resolve()->ImmediateU32()) == kind);
+    Require(user.Argument(1)->Resolve()->ImmediateU32() == fieldOffset);
+    Require(user.Argument(2)->Resolve()->ImmediateU32() == count);
+}
 static void Refused(IrOpcode opcode, std::uint32_t offset, std::uint32_t count) {
     IrProgram program;
     static_cast<void>(Build(program, opcode, offset, count));
@@ -74,4 +96,6 @@ int main() {
     Refused(IrOpcode::BitFieldUExtract, 10u, 4u);
     Refused(IrOpcode::BitFieldUExtract, 13u, 2u);
     Refused(IrOpcode::BitFieldUExtract, 16u, 14u);
+    FoldedLater(8u, 4u, StageInputKind::SampleId, 0u);
+    FoldedLater(16u, 11u, StageInputKind::Layer, 0u);
 }
