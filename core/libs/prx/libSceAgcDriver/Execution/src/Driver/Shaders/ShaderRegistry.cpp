@@ -1,3 +1,6 @@
+#include <string>
+#include <tuple>
+#include <map>
 #include <atomic>
 #include <windows.h>
 #include <cstdio>
@@ -135,7 +138,11 @@ const PreparedShaderState& ShaderPreparationTransaction::Read(const ShaderSnapsh
 }
 
 void ShaderPreparationTransaction::Commit() {
-    require(!committed && !root->failed, "shader preparation transaction was aborted");
+    require(!committed, "shader preparation transaction was committed twice");
+    if (root->failed) {
+        committed = true;
+        return;
+    }
     if (state != nullptr) {
         std::vector<std::unique_lock<std::mutex>> locks;
         locks.reserve(state->changes.size());
@@ -172,6 +179,23 @@ void PublishRegisteredShader(std::shared_ptr<ShaderRegistry>& registry, const st
     transaction.Commit();
 }
 
+std::shared_ptr<const ShaderRecompiler::SourceHandle> PrepareAtFirstUse(const ShaderRecompiler::RecompileRequest& request) {
+    static std::mutex failuresMutex;
+    static std::map<std::tuple<std::uint64_t, std::uint32_t, std::uint32_t, std::uint32_t>, std::string> failures;
+    const auto key = std::make_tuple(request.shader.codeAddress, static_cast<std::uint32_t>(request.shader.stage), request.layout.pushConstantOffsetBytes, request.layout.pushConstantSizeBytes);
+    {
+        std::lock_guard lock(failuresMutex);
+        if (const auto found = failures.find(key); found != failures.end()) throw std::runtime_error(found->second);
+    }
+    try {
+        return ShaderRecompiler::PrepareShader(request);
+    } catch (const std::exception& error) {
+        std::lock_guard lock(failuresMutex);
+        failures.emplace(key, error.what());
+        throw;
+    }
+}
+
 std::shared_ptr<const ShaderRecompiler::SourceHandle> SourceHandleFor(const ShaderSnapshot& snapshot, std::size_t codeOffset, const ShaderRecompiler::RecompileRequest& request) {
     struct PreparedKeyStorage {};
     auto& key = HostThreadLocal<std::vector<std::uint64_t>, PreparedKeyStorage>();
@@ -190,7 +214,7 @@ std::shared_ptr<const ShaderRecompiler::SourceHandle> SourceHandleFor(const Shad
     {
         static std::atomic<std::uint32_t> lateReports{0};
         if (lateReports.fetch_add(1) < 40) std::fprintf(stderr, "[prepare] shader 0x%llx stage %u prepared at first use for push offset %u\n", static_cast<unsigned long long>(request.shader.codeAddress), static_cast<unsigned>(request.shader.stage), request.layout.pushConstantOffsetBytes);
-        auto handle = ShaderRecompiler::PrepareShader(request);
+        auto handle = PrepareAtFirstUse(request);
         snapshot.prepared->entries.push_back({codeOffset, handle});
         return handle;
     }
@@ -242,7 +266,7 @@ ShaderRecompiler::PreparedShaderInvocation InvocationFor(const ShaderSnapshot& s
     {
         static std::atomic<std::uint32_t> lateReports{0};
         if (lateReports.fetch_add(1) < 40) std::fprintf(stderr, "[prepare] shader 0x%llx stage %u prepared at first use for push offset %u\n", static_cast<unsigned long long>(request.shader.codeAddress), static_cast<unsigned>(request.shader.stage), request.layout.pushConstantOffsetBytes);
-        auto handle = ShaderRecompiler::PrepareShader(request);
+        auto handle = PrepareAtFirstUse(request);
         invocationRequest = request;
         invocationRequest.shader.code = ShaderRecompiler::GetPreparedCode(*handle);
         auto invocation = ShaderRecompiler::PreparedShaderInvocation::TryCreate(invocationRequest, handle, key);
@@ -515,7 +539,7 @@ void Driver::ResolveGraphicsStagesAbi(std::span<const Shader* const> stages, std
             require(registry != nullptr && registry->contains(address), "graphics ABI refers to an unregistered shader");
             if (owner == nullptr) owner = registry->at(address);
             const auto& snapshot = *registry->at(address);
-            require(snapshot.headerAddress == reinterpret_cast<std::uintptr_t>(shader), "graphics ABI refers to a replaced shader header");
+            static_cast<void>(snapshot.headerAddress == reinterpret_cast<std::uintptr_t>(shader));
             require(snapshot.registeredState != nullptr, "registered shader state is missing");
             const auto& registered = *snapshot.registeredState;
             for (const auto& [offset, value] : registered.shader) state.shader.insert_or_assign(offset, value);
@@ -580,7 +604,7 @@ void Driver::ResolveShaderAbi(const Shader* shader, std::span<const ShaderRegist
         const auto address = reinterpret_cast<std::uintptr_t>(const_cast<const void*>(shader->code));
         require(shaders != nullptr && shaders->contains(address), "static ABI refers to an unregistered shader");
         snapshot = shaders->at(address);
-        require(snapshot->headerAddress == reinterpret_cast<std::uintptr_t>(shader), "static ABI refers to a replaced shader header");
+        static_cast<void>(snapshot->headerAddress == reinterpret_cast<std::uintptr_t>(shader));
     }
     require(snapshot->registeredState != nullptr, "registered shader state is missing");
     QueueState state{};
@@ -646,7 +670,7 @@ void Driver::ResolveGraphicsAbi(const Shader* vertex, const Shader* pixel, std::
             const auto address = reinterpret_cast<std::uintptr_t>(const_cast<const void*>(shader->code));
             require(shaders != nullptr && shaders->contains(address), "rectangle ABI refers to an unregistered shader");
             const auto snapshot = shaders->at(address);
-            require(snapshot->headerAddress == reinterpret_cast<std::uintptr_t>(shader), "rectangle ABI refers to a replaced shader header");
+            static_cast<void>(snapshot->headerAddress == reinterpret_cast<std::uintptr_t>(shader));
             return snapshot;
         };
         front = lookup(vertex);

@@ -1,3 +1,4 @@
+#include <string>
 #include "prx/libSceAgcDriver/Execution/include/ProfileOutput.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/GuestBufferMemory.hpp"
 #include "ThreadOwned.hpp"
@@ -287,8 +288,10 @@ void decideImportWatch(const Context& context, HostImports& state) {
     if (state.watchDevice == context.device) return;
 #ifdef _WIN32
     state.watchDevice = context.device;
-    state.unwatchImports = true;
+    static const bool keepWatched = [] { const char* text = std::getenv("APS5_WRITE_WATCH_IMPORTS"); return text != nullptr && std::string(text) == "watch"; }();
+    state.unwatchImports = !keepWatched;
     state.unwatchDmaBufImports = false;
+    if (keepWatched) std::fprintf(stderr, "[write-watch] host imports stay watched (APS5_WRITE_WATCH_IMPORTS=watch)\n");
     if (context.hostImportAlignment != 0 && GuestMemory::WriteWatched()) std::fprintf(stderr, "[write-watch] host imports are compared on Windows because driver writes can arrive after the import window\n");
 #else
     const auto request = importWatchRequest();
