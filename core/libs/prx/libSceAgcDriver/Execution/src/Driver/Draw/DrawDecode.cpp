@@ -53,6 +53,8 @@ void DecodeGraphicsPrograms(DrawDecode& decoded, const QueueState& queue, const 
             Graphics::NoteRegisterRead(Graphics::RegisterBank::Shader, userDataBase + i);
             result.userData.push_back((staticAbi ? ReadGraphicsRegister(queue.shader, userDataBase + i) : readUserData(queue.shader, userDataBase + i)));
         }
+        result.resourceRegister = rsrc2;
+        result.nullPixel = nullPixel;
         return result;
     };
     {
@@ -66,6 +68,9 @@ void DecodeGraphicsPrograms(DrawDecode& decoded, const QueueState& queue, const 
             roles.push_back(role);
         };
         const auto initializeMerged = [&](DrawProgram& program, std::uint32_t pointerBase, bool pointerRequired) {
+            program.merged = true;
+            program.mergedPointer = pointerBase;
+            program.mergedPointerRequired = pointerRequired;
             program.firstUserSgpr = 0;
             program.userData.insert(program.userData.begin(), 8, 0);
             Graphics::NoteRegisterRead(Graphics::RegisterBank::Shader, pointerBase);
@@ -109,6 +114,37 @@ void DecodeGraphicsPrograms(DrawDecode& decoded, const QueueState& queue, const 
             programs.back().firstUserSgpr = 0;
         }
     }
+}
+
+void Driver::readUserWords(const QueueState& queue, DrawProgram& program) {
+    Graphics::NoteRegisterRead(Graphics::RegisterBank::Shader, program.resourceRegister);
+    const auto resources = program.nullPixel && !queue.shader.contains(program.resourceRegister) ? 0u : readRegister(queue.shader, program.resourceRegister);
+    const auto userCount = ((resources >> 1u) & 0x1fu) | (((resources >> 27u) & 1u) << 5u);
+    require(userCount <= 32, "graphics user SGPR count exceeds the register bank");
+    program.userData.clear();
+    for (std::uint32_t i = 0; i < userCount; ++i) {
+        Graphics::NoteRegisterRead(Graphics::RegisterBank::Shader, program.userDataBase + i);
+        program.userData.push_back(readUserData(queue.shader, program.userDataBase + i));
+    }
+}
+
+void Driver::initializeMerged(const QueueState& queue, DrawProgram& program, std::uint32_t pointerBase, bool pointerRequired) {
+    program.merged = true;
+    program.mergedPointer = pointerBase;
+    program.mergedPointerRequired = pointerRequired;
+    program.firstUserSgpr = 0;
+    program.userData.insert(program.userData.begin(), 8, 0);
+    Graphics::NoteRegisterRead(Graphics::RegisterBank::Shader, pointerBase);
+    Graphics::NoteRegisterRead(Graphics::RegisterBank::Shader, pointerBase + 1);
+    if (!pointerRequired && !queue.shader.contains(pointerBase) && !queue.shader.contains(pointerBase + 1)) return;
+    const auto low = readRegister(queue.shader, pointerBase);
+    const auto high = readRegister(queue.shader, pointerBase + 1);
+    const auto address = static_cast<std::uint64_t>(low) | (static_cast<std::uint64_t>(high) << 32u);
+    require(address != 0 || !pointerRequired, "merged shader user-data address is null");
+    if (address == 0) return;
+    GuestMemory::CheckRange(reinterpret_cast<const void*>(address), 8, 4);
+    program.userData[0] = low;
+    program.userData[1] = high;
 }
 
 std::shared_ptr<DrawDecode> Driver::decodeDraw(const QueueState& queue, const Submission& submission) {
