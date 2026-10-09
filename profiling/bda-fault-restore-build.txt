@@ -1,0 +1,13 @@
+[0/2] Re-checking globbed directories...
+[1/12] Hashing the shader recompiler sources for the shader disk cache
+[2/10] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Graphics/src/BdaResources.cpp.obj
+[3/10] Linking CXX shared library core\libs\libs\unpatched\libSceAgcDriver.prx
+[4/10] Linking CXX executable tests\agc_driver_recorder_tests.exe
+[5/10] Linking CXX shared library core\libs\libs\unpatched\libSceAgc.prx
+[6/10] Linking CXX shared library core\libs\libs\unpatched\libSceVideoOut.prx
+[7/10] Patching NIDs for libSceAgc
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAgc.prx
+[8/10] Patching NIDs for libSceVideoOut
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceVideoOut.prx
+[9/10] Patching NIDs for libSceAgcDriver
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAgcDriver.prx

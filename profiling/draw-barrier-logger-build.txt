@@ -1,0 +1,381 @@
+[0/2] Re-checking globbed directories...
+[1/264] Building CXX object core/libs/prx/libkernel/CMakeFiles/libkernel.dir/Pthread/src/Cond.cpp.obj
+[2/264] Building CXX object core/libs/prx/libkernel/CMakeFiles/libkernel.dir/Equeue/Equeue.cpp.obj
+[3/264] Building CXX object core/libs/prx/libkernel/CMakeFiles/libkernel.dir/Time/Time.cpp.obj
+[4/264] Linking CXX shared library core\libs\libs\unpatched\libkernel.prx
+[5/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Dispatch/DispatchTiming.cpp.obj
+[6/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Draw/DrawCacheStatistics.cpp.obj
+[7/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Dispatch/DispatchCacheStatistics.cpp.obj
+[8/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Dispatch/Dispatch.cpp.obj
+[9/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Draw/DrawTiming.cpp.obj
+[10/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Memory/CaptureDiagnostics.cpp.obj
+[11/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Lifecycle.cpp.obj
+[12/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Packets/PacketFlush.cpp.obj
+[13/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Packets/PacketExecution.cpp.obj
+[14/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Packets/PacketTiming.cpp.obj
+[15/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Packets/PacketMemory.cpp.obj
+[16/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Presentation.cpp.obj
+[17/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Queues/QueueWorker.cpp.obj
+[18/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Synchronization/SynchronizationStatistics.cpp.obj
+[19/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Queues/Submission.cpp.obj
+[20/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/ShaderMemory.cpp.obj
+[21/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/GuestMemory.cpp.obj
+[22/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Shaders/ShaderRegistry.cpp.obj
+[23/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Graphics/src/Pipeline.cpp.obj
+[24/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/VulkanDevice.cpp.obj
+[25/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Graphics/src/Recorder.cpp.obj
+[26/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Graphics/src/ShaderResources.cpp.obj
+[27/264] Linking CXX shared library core\libs\libs\unpatched\libSceKeyboard.prx
+[28/264] Linking CXX shared library core\libs\libs\unpatched\libSceMouse.prx
+[29/264] Linking CXX shared library core\libs\libs\unpatched\libScePad.prx
+[30/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Graphics/src/BufferPool.cpp.obj
+[31/264] Linking CXX shared library core\libs\libs\unpatched\libMozaSDK.prx
+[32/264] Linking CXX shared library core\libs\libs\unpatched\libReactNative.Modules.Vsh.prx
+[33/264] Linking CXX shared library core\libs\libs\unpatched\libReactNative.Modules.Vsh.WebAppLauncher.prx
+[34/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Graphics/src/GuestBufferMemory.cpp.obj
+[35/264] Linking CXX shared library core\libs\libs\unpatched\libSceAcm.prx
+[36/264] Linking CXX shared library core\libs\libs\unpatched\libSceAgcVsh.prx
+[37/264] Linking CXX shared library core\libs\libs\unpatched\libSceAjm.prx
+[38/264] Linking CXX shared library core\libs\libs\unpatched\libSceAjmi.prx
+[39/264] Linking CXX shared library core\libs\libs\unpatched\libSceAudio.prx
+[40/264] Linking CXX shared library core\libs\libs\unpatched\libSceCommonDialog.prx
+[41/264] Linking CXX shared library core\libs\libs\unpatched\libSceContentDelete.prx
+[42/264] Linking CXX shared library core\libs\libs\unpatched\libSceContentSearch.prx
+[43/264] Linking CXX shared library core\libs\libs\unpatched\libSceConvertKeycode.prx
+[44/264] Linking CXX shared library core\libs\libs\unpatched\libSceGameLiveStreaming.prx
+[45/264] Linking CXX shared library core\libs\libs\unpatched\libSceHmd.prx
+[46/264] Linking CXX shared library core\libs\libs\unpatched\libSceImeBackend.prx
+[47/264] Linking CXX shared library core\libs\libs\unpatched\libSceImeDialog.prx
+[48/264] Linking CXX shared library core\libs\libs\unpatched\libSceMsgDialog.prx
+[49/264] Linking CXX shared library core\libs\libs\unpatched\libSceNpAuth.prx
+[50/264] Linking CXX shared library core\libs\libs\unpatched\libSceNpCommerce.prx
+[51/264] Linking CXX shared library core\libs\libs\unpatched\libSceNpEntitlementAccess.prx
+[52/264] Linking CXX shared library core\libs\libs\unpatched\libSceNpGameIntent.prx
+[53/264] Linking CXX shared library core\libs\libs\unpatched\libSceNpPartner001.prx
+[54/264] Linking CXX shared library core\libs\libs\unpatched\libSceNpUtility.prx
+[55/264] Linking CXX shared library core\libs\libs\unpatched\libSceNpWebApi2.prx
+[56/264] Linking CXX shared library core\libs\libs\unpatched\libScePlayerSelectionDialog.prx
+[57/264] Linking CXX shared library core\libs\libs\unpatched\libSceProprietaryVoiceChatHelperPrx.prx
+[58/264] Linking CXX shared library core\libs\libs\unpatched\libSceRemoteplay.prx
+[59/264] Linking CXX shared library core\libs\libs\unpatched\libSceRudp.prx
+[60/264] Linking CXX shared library core\libs\libs\unpatched\libSceSaveData.prx
+[61/264] Linking CXX shared library core\libs\libs\unpatched\libSceSaveDataDialog.prx
+[62/264] Linking CXX shared library core\libs\libs\unpatched\libSceShare.native.prx
+[63/264] Linking CXX shared library core\libs\libs\unpatched\libSceSharePlay.prx
+[64/264] Linking CXX shared library core\libs\libs\unpatched\libSceSigninDialog.prx
+[65/264] Linking CXX shared library core\libs\libs\unpatched\libSceUsbStorage.prx
+[66/264] Linking CXX shared library core\libs\libs\unpatched\libSceUsbStorageDialog.prx
+[67/264] Linking CXX shared library core\libs\libs\unpatched\libSceVdecsw.prx
+[68/264] Linking CXX shared library core\libs\libs\unpatched\libSceVideoRecordingP.prx
+[69/264] Linking CXX shared library core\libs\libs\unpatched\libSceVoice.prx
+[70/264] Linking CXX shared library core\libs\libs\unpatched\libSceVoiceChat.prx
+[71/264] Linking CXX shared library core\libs\libs\unpatched\libSceVrSetupDialog.prx
+[72/264] Linking CXX shared library core\libs\libs\unpatched\libSceVrTracker2.prx
+[73/264] Linking CXX shared library core\libs\libs\unpatched\libkernel_sys.prx
+[74/264] Linking CXX shared library core\libs\libs\unpatched\libkernel_web.prx
+[75/264] Linking CXX shared library core\libs\libs\unpatched\libSceAmpr.prx
+[76/264] Linking CXX shared library core\libs\libs\unpatched\libSceAppContent.prx
+[77/264] Linking CXX shared library core\libs\libs\unpatched\libSceAudio3d.prx
+[78/264] Linking CXX shared library core\libs\libs\unpatched\libSceAudioIn.prx
+[79/264] Linking CXX shared library core\libs\libs\unpatched\libSceAudioPropagation.prx
+[80/264] Linking CXX shared library core\libs\libs\unpatched\libSceAjm.native.prx
+[81/264] Linking CXX shared library core\libs\libs\unpatched\libSceAudioOut.prx
+[82/264] Linking CXX shared library core\libs\libs\unpatched\libSceAudiodec.prx
+[83/264] Linking CXX shared library core\libs\libs\unpatched\libSceAudiodec.native.prx
+[84/264] Linking CXX shared library core\libs\libs\unpatched\libSceBluetoothHid.prx
+[85/264] Linking CXX shared library core\libs\libs\unpatched\libSceAvPlayer.prx
+[86/264] Linking CXX shared library core\libs\libs\unpatched\libSceCdlgPlayerReview.prx
+[87/264] Linking CXX shared library core\libs\libs\unpatched\libSceCesCs.prx
+[88/264] Linking CXX shared library core\libs\libs\unpatched\libSceContentExport.prx
+[89/264] Linking CXX shared library core\libs\libs\unpatched\libSceErrorDialog.prx
+[90/264] Linking CXX shared library core\libs\libs\unpatched\libSceFiber.prx
+[91/264] Linking CXX shared library core\libs\libs\unpatched\libSceFont.prx
+[92/264] Linking CXX shared library core\libs\libs\unpatched\libSceAvPlayer.native.prx
+[93/264] Linking CXX shared library core\libs\libs\unpatched\libSceFont-module.prx
+[94/264] Linking CXX shared library core\libs\libs\unpatched\libSceFont.native.prx
+[95/264] Linking CXX shared library core\libs\libs\unpatched\libSceFontFt.prx
+[96/264] Linking CXX shared library core\libs\libs\unpatched\libSceFontFt-module.prx
+[97/264] Linking CXX shared library core\libs\libs\unpatched\libSceGameUpdate.prx
+[98/264] Linking CXX shared library core\libs\libs\unpatched\libSceHmd2.prx
+[99/264] Linking CXX shared library core\libs\libs\unpatched\libSceHttp.prx
+[100/264] Linking CXX shared library core\libs\libs\unpatched\libSceHttp2.prx
+[101/264] Linking CXX shared library core\libs\libs\unpatched\libSceIme.prx
+[102/264] Linking CXX shared library core\libs\libs\unpatched\libSceJpegDec.prx
+[103/264] Linking CXX shared library core\libs\libs\unpatched\libSceJson2.prx
+[104/264] Linking CXX shared library core\libs\libs\unpatched\libSceJpegEnc.prx
+[105/264] Linking CXX shared library core\libs\libs\unpatched\libSceLibcInternal.prx
+[106/264] Linking CXX shared library core\libs\libs\unpatched\libSceLoginDialog.prx
+[107/264] Linking CXX shared library core\libs\libs\unpatched\libSceMbus.prx
+[108/264] Linking CXX shared library core\libs\libs\unpatched\libSceMsgDialog.native.prx
+[109/264] Linking CXX shared library core\libs\libs\unpatched\libSceNet.prx
+[110/264] Linking CXX shared library core\libs\libs\unpatched\libSceNetCtl.prx
+[111/264] Linking CXX shared library core\libs\libs\unpatched\libSceNgs2.prx
+[112/264] Linking CXX shared library core\libs\libs\unpatched\libSceNgs2.native.prx
+[113/264] Linking CXX shared library core\libs\libs\unpatched\libSceNpManager.prx
+[114/264] Linking CXX shared library core\libs\libs\unpatched\libSceNpSessionSignaling.prx
+[115/264] Linking CXX shared library core\libs\libs\unpatched\libSceNpTrophy2.prx
+[116/264] Linking CXX shared library core\libs\libs\unpatched\libSceNpUniversalDataSystem.prx
+[117/264] Linking CXX shared library core\libs\libs\unpatched\libScePlayGo.prx
+[118/264] Linking CXX shared library core\libs\libs\unpatched\libScePlayGoDialog.prx
+[119/264] Linking CXX shared library core\libs\libs\unpatched\libScePlayerInvitationDialog.prx
+[120/264] Linking CXX shared library core\libs\libs\unpatched\libScePngDec.prx
+[121/264] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Graphics/src/Texture.cpp.obj
+[122/264] Linking CXX shared library core\libs\libs\unpatched\libScePngEnc.prx
+[123/264] Linking CXX shared library core\libs\libs\unpatched\libScePosixForWebKit.prx
+[124/264] Linking CXX shared library core\libs\libs\unpatched\libScePsml_debug.prx
+[125/264] Linking CXX shared library core\libs\libs\unpatched\libSceRandom.prx
+[126/264] Linking CXX shared library core\libs\libs\unpatched\libSceRazorCpu.prx
+[127/264] Linking CXX shared library core\libs\libs\unpatched\libSceRtc.prx
+[128/264] Linking CXX shared library core\libs\libs\unpatched\libSceSaveData.native.prx
+[129/264] Linking CXX shared library core\libs\libs\unpatched\libSceSaveDataDialog.native.prx
+[130/264] Linking CXX shared library core\libs\libs\unpatched\libSceShare.prx
+[131/264] Linking CXX shared library core\libs\libs\unpatched\libSceSsl.prx
+[132/264] Linking CXX shared library core\libs\libs\unpatched\libSceSysmodule.prx
+[133/264] Linking CXX shared library core\libs\libs\unpatched\libSceSystemGesture.prx
+[134/264] Linking CXX shared library core\libs\libs\unpatched\libSceSystemService.prx
+[135/264] Linking CXX shared library core\libs\libs\unpatched\libSceTextToSpeech2.prx
+[136/264] Linking CXX shared library core\libs\libs\unpatched\libSceUlt.prx
+[137/264] Linking CXX shared library core\libs\libs\unpatched\libSceUsbd.prx
+[138/264] Linking CXX shared library core\libs\libs\unpatched\libSceUserService.prx
+[139/264] Linking CXX shared library core\libs\libs\unpatched\libSceVoiceQoS.prx
+[140/264] Linking CXX shared library core\libs\libs\unpatched\libSceWebBrowserDialog.prx
+[141/264] Linking CXX shared library core\libs\libs\unpatched\libSceAgcDriver.prx
+[142/264] Linking CXX shared library core\libs\libs\unpatched\ulobjmgr.prx
+[143/264] Linking CXX shared library core\libs\libs\unpatched\libSceAgc.prx
+[144/264] Linking CXX shared library core\libs\libs\unpatched\libSceVideoOut.prx
+[145/264] Linking CXX executable tests\agc_driver_recorder_tests.exe
+[146/264] Linking CXX shared library core\libs\libs\unpatched\libSceVideodec2.prx
+[147/264] Patching NIDs for libMozaSDK
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libMozaSDK.prx
+[148/264] Patching NIDs for libReactNative.Modules.Vsh.WebAppLauncher
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libReactNative.Modules.Vsh.WebAppLauncher.prx
+[149/264] Patching NIDs for libReactNative.Modules.Vsh
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libReactNative.Modules.Vsh.prx
+[150/264] Patching NIDs for libSceAcm
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAcm.prx
+[151/264] Patching NIDs for libSceAgc
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAgc.prx
+[152/264] Patching NIDs for libSceAgcVsh
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAgcVsh.prx
+[153/264] Patching NIDs for libSceAjm
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAjm.prx
+[154/264] Patching NIDs for libSceAjmi
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAjmi.prx
+[155/264] Patching NIDs for libSceAmpr
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAmpr.prx
+[156/264] Patching NIDs for libSceAppContent
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAppContent.prx
+[157/264] Patching NIDs for libSceAjm.native
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAjm.native.prx
+[158/264] Patching NIDs for libSceAudio
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAudio.prx
+[159/264] Patching NIDs for libSceAudio3d
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAudio3d.prx
+[160/264] Patching NIDs for libSceAgcDriver
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAgcDriver.prx
+[161/264] Patching NIDs for libSceAudioIn
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAudioIn.prx
+[162/264] Patching NIDs for libSceAudioPropagation
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAudioPropagation.prx
+[163/264] Patching NIDs for libSceAudioOut
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAudioOut.prx
+[164/264] Patching NIDs for libSceAudiodec.native
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAudiodec.native.prx
+[165/264] Patching NIDs for libSceAudiodec
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAudiodec.prx
+[166/264] Patching NIDs for libSceBluetoothHid
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceBluetoothHid.prx
+[167/264] Patching NIDs for libSceAvPlayer.native
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAvPlayer.native.prx
+[168/264] Patching NIDs for libSceCdlgPlayerReview
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceCdlgPlayerReview.prx
+[169/264] Patching NIDs for libSceCesCs
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceCesCs.prx
+[170/264] Patching NIDs for libSceAvPlayer
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAvPlayer.prx
+[171/264] Patching NIDs for libSceCommonDialog
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceCommonDialog.prx
+[172/264] Patching NIDs for libSceContentDelete
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceContentDelete.prx
+[173/264] Patching NIDs for libSceContentExport
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceContentExport.prx
+[174/264] Patching NIDs for libSceContentSearch
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceContentSearch.prx
+[175/264] Patching NIDs for libSceConvertKeycode
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceConvertKeycode.prx
+[176/264] Patching NIDs for libSceErrorDialog
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceErrorDialog.prx
+[177/264] Patching NIDs for libSceFiber
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceFiber.prx
+[178/264] Patching NIDs for libSceFont-module
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceFont-module.prx
+[179/264] Patching NIDs for libSceFont.native
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceFont.native.prx
+[180/264] Patching NIDs for libSceFont
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceFont.prx
+[181/264] Patching NIDs for libSceFontFt-module
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceFontFt-module.prx
+[182/264] Patching NIDs for libSceGameLiveStreaming
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceGameLiveStreaming.prx
+[183/264] Patching NIDs for libSceGameUpdate
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceGameUpdate.prx
+[184/264] Patching NIDs for libSceFontFt
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceFontFt.prx
+[185/264] Patching NIDs for libSceHmd
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceHmd.prx
+[186/264] Patching NIDs for libSceHmd2
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceHmd2.prx
+[187/264] Patching NIDs for libSceHttp
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceHttp.prx
+[188/264] Patching NIDs for libSceHttp2
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceHttp2.prx
+[189/264] Patching NIDs for libSceIme
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceIme.prx
+[190/264] Patching NIDs for libSceImeBackend
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceImeBackend.prx
+[191/264] Patching NIDs for libSceImeDialog
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceImeDialog.prx
+[192/264] Patching NIDs for libSceJpegDec
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceJpegDec.prx
+[193/264] Patching NIDs for libSceJpegEnc
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceJpegEnc.prx
+[194/264] Patching NIDs for libSceJson2
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceJson2.prx
+[195/264] Patching NIDs for libSceKeyboard
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceKeyboard.prx
+[196/264] Patching NIDs for libSceLibcInternal
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceLibcInternal.prx
+[197/264] Patching NIDs for libSceLoginDialog
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceLoginDialog.prx
+[198/264] Patching NIDs for libSceMbus
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceMbus.prx
+[199/264] Patching NIDs for libSceMouse
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceMouse.prx
+[200/264] Patching NIDs for libSceMsgDialog.native
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceMsgDialog.native.prx
+[201/264] Patching NIDs for libSceMsgDialog
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceMsgDialog.prx
+[202/264] Patching NIDs for libSceNet
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceNet.prx
+[203/264] Patching NIDs for libSceNetCtl
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceNetCtl.prx
+[204/264] Patching NIDs for libSceNgs2.native
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceNgs2.native.prx
+[205/264] Patching NIDs for libSceNgs2
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceNgs2.prx
+[206/264] Patching NIDs for libSceNpAuth
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceNpAuth.prx
+[207/264] Patching NIDs for libSceNpCommerce
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceNpCommerce.prx
+[208/264] Patching NIDs for libSceNpEntitlementAccess
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceNpEntitlementAccess.prx
+[209/264] Patching NIDs for libSceNpGameIntent
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceNpGameIntent.prx
+[210/264] Patching NIDs for libSceNpManager
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceNpManager.prx
+[211/264] Patching NIDs for libSceNpPartner001
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceNpPartner001.prx
+[212/264] Patching NIDs for libSceNpSessionSignaling
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceNpSessionSignaling.prx
+[213/264] Patching NIDs for libSceNpTrophy2
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceNpTrophy2.prx
+[214/264] Patching NIDs for libSceNpUniversalDataSystem
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceNpUniversalDataSystem.prx
+[215/264] Patching NIDs for libSceNpUtility
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceNpUtility.prx
+[216/264] Patching NIDs for libSceNpWebApi2
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceNpWebApi2.prx
+[217/264] Patching NIDs for libScePad
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libScePad.prx
+[218/264] Patching NIDs for libScePlayGoDialog
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libScePlayGoDialog.prx
+[219/264] Patching NIDs for libScePlayGo
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libScePlayGo.prx
+[220/264] Patching NIDs for libScePlayerInvitationDialog
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libScePlayerInvitationDialog.prx
+[221/264] Patching NIDs for libScePlayerSelectionDialog
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libScePlayerSelectionDialog.prx
+[222/264] Patching NIDs for libScePngDec
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libScePngDec.prx
+[223/264] Patching NIDs for libScePngEnc
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libScePngEnc.prx
+[224/264] Patching NIDs for libScePosixForWebKit
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libScePosixForWebKit.prx
+[225/264] Patching NIDs for libSceProprietaryVoiceChatHelperPrx
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceProprietaryVoiceChatHelperPrx.prx
+[226/264] Patching NIDs for libScePsml_debug
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libScePsml_debug.prx
+[227/264] Patching NIDs for libSceRandom
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceRandom.prx
+[228/264] Patching NIDs for libSceRemoteplay
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceRemoteplay.prx
+[229/264] Patching NIDs for libSceRazorCpu
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceRazorCpu.prx
+[230/264] Patching NIDs for libSceRtc
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceRtc.prx
+[231/264] Patching NIDs for libSceRudp
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceRudp.prx
+[232/264] Patching NIDs for libSceSaveData.native
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceSaveData.native.prx
+[233/264] Patching NIDs for libSceSaveData
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceSaveData.prx
+[234/264] Patching NIDs for libSceSaveDataDialog.native
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceSaveDataDialog.native.prx
+[235/264] Patching NIDs for libSceSaveDataDialog
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceSaveDataDialog.prx
+[236/264] Patching NIDs for libSceShare.native
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceShare.native.prx
+[237/264] Patching NIDs for libSceShare
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceShare.prx
+[238/264] Patching NIDs for libSceSharePlay
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceSharePlay.prx
+[239/264] Patching NIDs for libSceSigninDialog
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceSigninDialog.prx
+[240/264] Patching NIDs for libSceSsl
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceSsl.prx
+[241/264] Patching NIDs for libSceSysmodule
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceSysmodule.prx
+[242/264] Patching NIDs for libSceSystemGesture
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceSystemGesture.prx
+[243/264] Patching NIDs for libSceSystemService
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceSystemService.prx
+[244/264] Patching NIDs for libSceUlt
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceUlt.prx
+[245/264] Patching NIDs for libSceTextToSpeech2
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceTextToSpeech2.prx
+[246/264] Patching NIDs for libSceUsbStorage
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceUsbStorage.prx
+[247/264] Patching NIDs for libSceUsbStorageDialog
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceUsbStorageDialog.prx
+[248/264] Patching NIDs for libSceUsbd
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceUsbd.prx
+[249/264] Patching NIDs for libSceUserService
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceUserService.prx
+[250/264] Patching NIDs for libSceVdecsw
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceVdecsw.prx
+[251/264] Patching NIDs for libSceVideoOut
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceVideoOut.prx
+[252/264] Patching NIDs for libSceVideoRecordingP
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceVideoRecordingP.prx
+[253/264] Patching NIDs for libSceVoice
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceVoice.prx
+[254/264] Patching NIDs for libSceVoiceChat
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceVoiceChat.prx
+[255/264] Patching NIDs for libSceVoiceQoS
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceVoiceQoS.prx
+[256/264] Patching NIDs for libSceVrSetupDialog
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceVrSetupDialog.prx
+[257/264] Patching NIDs for libSceVrTracker2
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceVrTracker2.prx
+[258/264] Patching NIDs for libSceWebBrowserDialog
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceWebBrowserDialog.prx
+[259/264] Patching NIDs for libSceVideodec2
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceVideodec2.prx
+[260/264] Patching NIDs for libkernel_sys
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libkernel_sys.prx
+[261/264] Patching NIDs for libkernel
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libkernel.prx
+[262/264] Patching NIDs for libkernel_web
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libkernel_web.prx
+[263/264] Patching NIDs for ulobjmgr
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/ulobjmgr.prx

@@ -1,0 +1,4 @@
+[time] scheduler tick raised to 0.5 ms (was 0.50 ms, now 0.50 ms, timed waits fine)
+[bda-table] using mapped device-local memory for read-only address tables
+[bda-table] mapped device-local memory unavailable; using host memory
+BDA table allocation, reuse and host fallback passed

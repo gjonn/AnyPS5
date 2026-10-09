@@ -7,6 +7,8 @@
 #include "prx/libSceAgcDriver/Graphics/include/DccMetadata.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/GuestBufferMemory.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Resources.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/BdaResources.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/PerformanceControls.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/ShaderResources.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Shaders.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Texture.hpp"
@@ -38,6 +40,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -3119,9 +3122,265 @@ void keysFillTests(const Device& device, Recorder& recorder) {
     recorder.Sync();
 }
 
+void mergedImportBoundsTest(const Device& device, Recorder& recorder) {
+    const auto& context = device.GetContext();
+    Require(context.hostImportAlignment != 0, "merged import test requires host imports");
+    constexpr std::size_t half = 65536;
+#ifdef _WIN32
+    auto* block = static_cast<std::byte*>(VirtualAlloc(nullptr, 2 * half, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+#else
+    auto* block = static_cast<std::byte*>(std::aligned_alloc(half, 2 * half));
+#endif
+    Require(block != nullptr, "cannot allocate merged import test memory");
+    const auto address = reinterpret_cast<std::uint64_t>(block);
+    struct Cleanup {
+        const Context& context;
+        Recorder& recorder;
+        std::byte* block;
+        std::uint64_t address;
+        ~Cleanup() {
+            recorder.Sync();
+            { GuestAllocations::Mutation mutation; mutation.Remove(block); mutation.Remove(block + half); }
+            HostImportFor(context, address, 2 * half);
+#ifdef _WIN32
+            VirtualFree(block, 0, MEM_RELEASE);
+#else
+            std::free(block);
+#endif
+        }
+    } cleanup{context, recorder, block, address};
+    std::memset(block, 0x37, 2 * half);
+    { GuestAllocations::Mutation mutation; mutation.Add(block, half, true, true); mutation.Add(block + half, half, true, true); }
+    Require(HostImportFor(context, address, half) != nullptr && HostImportFor(context, address + half, half) != nullptr, "could not import adjacent test ranges");
+    GuestBufferMemory memory(context);
+    memory.AcquireRegistered();
+    // Cross both registrations so their regions merge; the first import alone
+    // must not be reused as the backing buffer of the larger merged region.
+    memory.AddReadable(address + half / 2, half);
+    memory.Upload(true);
+    std::uint32_t adjustment = 0;
+    const auto view = memory.Descriptor(address + half + 16, 32, adjustment);
+    Require(view.buffer != VK_NULL_HANDLE && view.range >= 32, "merged import descriptor is invalid");
+    memory.WriteBack();
+}
+
+void drawBarrierTests(const Device& device, Recorder& recorder, bool toggleLive = false) {
+    std::thread establishThreadedProcess([] {});
+    establishThreadedProcess.join();
+    Require(std::getenv("APS5_PROFILE_DRAW") != nullptr, "draw barrier test requires profiling counters");
+    constexpr std::uint32_t side = 128;
+    constexpr std::size_t bytes = side * side * 4;
+    std::array<void*, 2> blocks{};
+    for (auto& block : blocks) {
+        block = AllocateWatched(bytes, 65536);
+        Require(block != nullptr, "cannot allocate draw barrier target");
+        auto* pixels = static_cast<std::uint8_t*>(block);
+        for (std::size_t i = 0; i < bytes; i += 4) {
+            pixels[i] = 16; pixels[i + 1] = 24; pixels[i + 2] = 40; pixels[i + 3] = 255;
+        }
+        GuestAllocations::Mutation mutation;
+        mutation.Add(block, bytes, true, true);
+    }
+    struct Cleanup {
+        Recorder& recorder;
+        VkDevice device;
+        std::array<void*, 2>& blocks;
+        ~Cleanup() {
+            recorder.Sync();
+            ClearCachedPipelines(device);
+            ClearCachedTextures(device);
+            for (auto* block : blocks) {
+                { GuestAllocations::Mutation mutation; mutation.Remove(block); }
+                ReleaseWatched(block, bytes);
+            }
+        }
+    } cleanup{recorder, device.GetContext().device, blocks};
+    auto context = device.GetContext();
+    TextureDetiler detiler(context);
+    context.detiler = &detiler;
+    ShaderRecompiler::RecompileResult vertex, fragment;
+    vertex.variantId = 0x72620001;
+    fragment.variantId = 0x72620002;
+    vertex.spirv = std::vector<std::uint32_t>(std::begin(TRIANGLE_vert_SPV), std::end(TRIANGLE_vert_SPV));
+    fragment.spirv = std::vector<std::uint32_t>(std::begin(TRIANGLE_frag_SPV), std::end(TRIANGLE_frag_SPV));
+    const std::array shaders{CompiledShader{ShaderRecompiler::ShaderStage::Vertex, &vertex, 0}, CompiledShader{ShaderRecompiler::ShaderStage::Fragment, &fragment, 0}};
+    State state{};
+    state.stages.path = ShaderPath::Vertex;
+    state.hasColorTarget = true;
+    state.renderExtent = {side, side};
+    state.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    state.viewport = {0, static_cast<float>(side), static_cast<float>(side), -static_cast<float>(side), 0, 1};
+    state.scissor = {{0, 0}, {side, side}};
+    state.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    state.blend.colorWriteMask = 15;
+    state.blend.blendEnable = VK_TRUE;
+    state.blend.srcColorBlendFactor = VK_BLEND_FACTOR_CONSTANT_COLOR;
+    state.blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    state.blend.colorBlendOp = VK_BLEND_OP_ADD;
+    state.blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    state.blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    state.blend.alphaBlendOp = VK_BLEND_OP_ADD;
+    state.blendConstants.fill(0.125f);
+    state.blends = {state.blend};
+    const AgcDriver::Pm4::DrawParameters draw{0, 3, 0, 1, 0, false};
+    const auto render = [&](void* block) {
+        state.color = {reinterpret_cast<std::uintptr_t>(block), {side, side}, VK_FORMAT_R8G8B8A8_UNORM, bytes};
+        state.colors = {state.color};
+        Draw(context, state, draw, shaders);
+    };
+    for (auto* block : blocks) render(block);
+    recorder.Sync();
+    const auto readBack = [&] {
+        for (auto* block : blocks) {
+            auto target = StorageTexture::FindLive(reinterpret_cast<std::uint64_t>(block), bytes);
+            Require(target != nullptr, "draw barrier target was not resident");
+            target->WriteBack();
+        }
+        recorder.Sync();
+    };
+    readBack();
+    std::array<std::uint8_t, bytes> firstDraw{};
+    std::memcpy(firstDraw.data(), blocks[0], bytes);
+    const auto before = Recorder::MergedBarriers(Recorder::CommandClass::Draw);
+    const auto originalFlags = LivePerformanceControls().Get();
+    for (unsigned pass = 0; pass < 4; ++pass) {
+        if (toggleLive) LivePerformanceControls().Set((originalFlags & ~PerformanceControls::MergeDrawBarriers) |
+            (pass % 2 != 0 ? PerformanceControls::MergeDrawBarriers : 0));
+        for (auto* block : blocks) render(block);
+    }
+    recorder.Sync();
+    LivePerformanceControls().Set(originalFlags);
+    const auto merged = Recorder::MergedBarriers(Recorder::CommandClass::Draw) - before;
+    Require(!Recorder::MergeDrawBarriers() || merged != 0, "draw barrier test did not exercise a covered leading barrier");
+    readBack();
+    Require(std::memcmp(blocks[0], blocks[1], bytes) == 0, "alternating render passes produced different pixels");
+    const auto* pixels = static_cast<const std::uint8_t*>(blocks[0]);
+    const auto center = (side / 2 * side + side / 2) * 4;
+    Require(pixels[center] > 30 && pixels[center + 1] > 30 && pixels[center + 2] > 30, "alternating passes did not draw the triangle");
+    // Each pass reads the previous attachment contents for additive blending.
+    // A missing or stale write must not pass merely because the same triangle
+    // was rendered during prewarming. Allow only UNORM rounding differences.
+    constexpr std::array initial{16, 24, 40, 255};
+    for (std::size_t i = 0; i < bytes; ++i) {
+        const auto expected = std::min(255, initial[i % 4] + 5 * (firstDraw[i] - initial[i % 4]));
+        Require(std::abs(static_cast<int>(pixels[i]) - expected) <= 3, "alternating passes lost an additive attachment update");
+    }
+    Require(pixels[0] == 16 && pixels[1] == 24 && pixels[2] == 40, "alternating passes changed the background");
+    ClearCachedPipelines(context.device);
+    std::cout << "Alternating render-pass GPU readback passed, " << merged << " leading draw barriers merged\n";
+}
+
+void uploadMemoryTests(const Device& device, Recorder& recorder) {
+    const auto& base = device.GetContext();
+    const char* local = std::getenv("APS5_SHADER_DATA_DEVICE_LOCAL");
+    Require(local != nullptr && std::string_view(local) == "1", "upload memory tests require APS5_SHADER_DATA_DEVICE_LOCAL=1");
+    constexpr std::size_t words = 4096;
+    std::array<std::uint32_t, words> expected;
+    // Exercise the no-mappable-VRAM fallback with a fresh pool. Memory type indices
+    // remain the real device's indices; only the advertised local property is removed.
+    for (const bool fallback : {true, false}) {
+        auto context = base;
+        context.bufferPool.reset();
+        if (fallback) {
+            for (std::uint32_t i = 0; i < context.memory.memoryTypeCount; ++i) {
+                context.memory.memoryTypes[i].propertyFlags &= ~VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+            }
+        }
+        for (std::uint32_t iteration = 0; iteration < 2; ++iteration) {
+            auto input = MakeShaderDataBuffer(context, sizeof(expected), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+            Buffer output(context, sizeof(expected), VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+            for (std::size_t i = 0; i < words; ++i) expected[i] = static_cast<std::uint32_t>(i * 2654435761u + iteration);
+            std::memcpy(input->Bytes().data(), expected.data(), sizeof(expected));
+            for (const bool updateOnGpu : {false, true}) {
+                const auto commands = recorder.Commands();
+                RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+                if (updateOnGpu) {
+                    for (auto& word : expected) word ^= 0xa5c37e19u;
+                    context.Function<PFN_vkCmdUpdateBuffer>("vkCmdUpdateBuffer")(commands, input->Handle(), 0, sizeof(expected), expected.data());
+                    RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+                }
+                CopyBuffer(context, commands, input->Handle(), 0, output.Handle(), 0, sizeof(expected));
+                RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
+                recorder.Submit();
+                device.WaitQueue();
+                recorder.Sync();
+                Require(std::memcmp(output.Bytes().data(), expected.data(), sizeof(expected)) == 0, "upload buffer GPU readback differs from the CPU reference");
+            }
+        }
+    }
+    dataRefreshTests(device, recorder);
+    std::cout << "Upload buffer CPU writes, GPU updates, reuse and memory-type fallback tests passed\n";
+}
+
 int main(int argc, char** argv) {
     try {
         Device device;
+        if (argc == 2 && std::string_view(argv[1]) == "--performance-control-file-only") {
+            const char* path = std::getenv("APS5_PERF_CONTROL");
+            Require(path != nullptr, "performance control file test needs an isolated output path");
+            const auto write = [&](std::string_view text) {
+                std::ofstream output(path, std::ios::binary | std::ios::trunc);
+                output << text;
+                Require(static_cast<bool>(output), "cannot write performance control fixture");
+            };
+            LivePerformanceControls().Set(0);
+            write("merge_draw_barriers=1\nbda_table_device_local=1\n");
+            Recorder::CountPresent();
+            Require(LivePerformanceControls().Get() == 3, "presentation did not load the performance control file");
+            write("merge_draw_barriers=0\n");
+            std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+            Recorder::CountPresent();
+            Require(LivePerformanceControls().Get() == 3, "partial performance control file changed live flags");
+            write("merge_draw_barriers=0\nbda_table_device_local=0\n");
+            std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+            Recorder::CountPresent();
+            Require(LivePerformanceControls().Get() == 0, "presentation did not restore performance flags");
+            std::cout << "Presentation control-file polling and partial edit rejection passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--bda-table-memory-only") {
+            Require(std::getenv("APS5_BDA_TABLE_DEVICE_LOCAL") != nullptr, "BDA table memory test requires local tables enabled");
+            std::lock_guard gpu(GpuMutex());
+            for (const bool fallback : {false, true}) {
+                auto context = device.GetContext();
+                context.bufferPool.reset();
+                if (fallback) {
+                    for (std::uint32_t i = 0; i < context.memory.memoryTypeCount; ++i)
+                        context.memory.memoryTypes[i].propertyFlags &= ~VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+                }
+                GuestBufferMemory memory(context);
+                memory.Upload(true);
+                LivePerformanceControls().Set(0);
+                BdaResources host(context, memory);
+                LivePerformanceControls().Set(PerformanceControls::BdaTableDeviceLocal);
+                BdaResources first(context, memory);
+                BdaResources reused(context, memory);
+                Require(first.Table().buffer != VK_NULL_HANDLE && first.Table().buffer == reused.Table().buffer,
+                    "BDA table allocation or reuse failed");
+                Require(host.Table().buffer != first.Table().buffer, "live table placement switch reused the previous allocation");
+                LivePerformanceControls().Set(0);
+                BdaResources hostAgain(context, memory);
+                Require(hostAgain.Table().buffer == host.Table().buffer, "live table placement switch lost the retained host table");
+                first.CheckFault();
+                reused.CheckFault();
+            }
+            std::cout << "BDA table allocation, reuse and host fallback passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--benchmark-bda-fault-check") {
+            std::lock_guard gpu(GpuMutex());
+            BdaResources resources(device.GetContext());
+            constexpr unsigned repeats = 1000;
+            std::array<double, 5> times;
+            for (auto& time : times) {
+                const auto start = std::chrono::steady_clock::now();
+                for (unsigned i = 0; i < repeats; ++i) resources.CheckFault();
+                time = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / repeats;
+            }
+            std::ranges::sort(times);
+            std::cout << "Empty BDA fault check: median " << times[2] << " us/check, max pass " << times.back() << " us/check\n";
+            return 0;
+        }
         if (argc == 2 && (std::string_view(argv[1]) == "--benchmark-pipeline-cache" || std::string_view(argv[1]) == "--pipeline-cache-only")) {
             pipelineCacheTests(device, std::string_view(argv[1]) == "--benchmark-pipeline-cache");
             return 0;
@@ -3131,6 +3390,28 @@ int main(int argc, char** argv) {
         std::cout << "host imports " << (PrepareImportWatch(device.GetContext()) == ImportWatch::Unwatch ? "are compared" : "stay watched") << '\n';
         Recorder recorder(device.GetContext());
         recorder.Activate();
+        if (argc == 2 && (std::string_view(argv[1]) == "--draw-barriers-only" || std::string_view(argv[1]) == "--draw-barriers-live")) {
+            drawBarrierTests(device, recorder, std::string_view(argv[1]) == "--draw-barriers-live");
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--upload-memory-only") {
+            uploadMemoryTests(device, recorder);
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--draw-input-only") {
+            Require(std::getenv("APS5_DRAW_INPUT_MEMO") != nullptr, "draw input tests require APS5_DRAW_INPUT_MEMO=1");
+            Require(AgcDriver::GuestMemory::WriteWatched(), "draw input tests require write watching");
+            drawInputReuseTests(device, recorder);
+            drawInputMemoTests(device, recorder);
+            drawSnapshotEvictionTests(device);
+            std::cout << "Draw input reuse, invalidation and eviction tests passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--merged-import-only") {
+            mergedImportBoundsTest(device, recorder);
+            std::cout << "Merged import bounds test passed\n";
+            return 0;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--cube-only") {
             singleCubeTests(device, recorder);
             std::cout << "Single cube snapshot and storage sampling tests passed\n";
@@ -3158,6 +3439,7 @@ int main(int argc, char** argv) {
         RunResidentPresentTests(device.GetContext());
         storeRunTests(device, recorder);
         remappedImportTests(device);
+        if (device.GetContext().hostImportAlignment != 0) mergedImportBoundsTest(device, recorder);
         movedMetadataTests(device, recorder);
         viewPastLastMipTests(device, recorder);
         keysFillTests(device, recorder);

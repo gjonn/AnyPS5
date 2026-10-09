@@ -344,6 +344,20 @@ target_link_libraries(agc_vop1_control_decode_tests PRIVATE shader_recompiler_ag
 set_target_properties(agc_vop1_control_decode_tests PROPERTIES CXX_EXTENSIONS OFF)
 configure_windows_unwind(agc_vop1_control_decode_tests)
 
+add_test_executable(agc_performance_controls_tests EXCLUDE_FROM_ALL tests/PerformanceControls.cpp)
+target_include_directories(agc_performance_controls_tests PRIVATE ${LIBS_INCLUDE_DIR})
+target_link_libraries(agc_performance_controls_tests PRIVATE libc)
+set_target_properties(agc_performance_controls_tests PROPERTIES CXX_EXTENSIONS OFF)
+configure_windows_unwind(agc_performance_controls_tests)
+if(BUILD_TESTING)
+    set_target_properties(agc_performance_controls_tests PROPERTIES EXCLUDE_FROM_ALL OFF)
+    add_test(NAME agc_performance_controls COMMAND agc_performance_controls_tests)
+    if(WIN32)
+        set_tests_properties(agc_performance_controls PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+    endif()
+endif()
+
 add_test_executable(agc_dcc_key_sharing_tests EXCLUDE_FROM_ALL tests/DccKeySharing.cpp)
 target_include_directories(agc_dcc_key_sharing_tests PRIVATE ${LIBS_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/core/shader/recompiler ${CMAKE_SOURCE_DIR}/3rdparty/Vulkan-Headers/include)
 target_link_libraries(agc_dcc_key_sharing_tests PRIVATE libc)

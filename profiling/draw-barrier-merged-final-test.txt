@@ -1,0 +1,88 @@
+[time] scheduler tick raised to 0.5 ms (was 0.50 ms, now 0.50 ms, timed waits fine)
+[write-watch] host imports stay watched (APS5_WRITE_WATCH_IMPORTS=watch)
+[write-watch] host imports are compared on Windows because driver writes can arrive after the import window
+host imports stay watched
+[src/Texture.cpp:711 StorageTexture] StorageTexture address=0x200000000 128x128 mips=1 mip=0 layers=0 base=0 dim=1 tile=0 format=56 vk=37
+[guestmem] read 0 calls 0 MiB 0.0 s compare 0 calls 0 MiB 0.0 s write 0 calls 0 MiB 0.0 s write-changed 0 calls 0 MiB 0.0 s collect 0 calls 0 MiB 0.0 s verify 0 calls 0 MiB 0.0 s query 1 calls 0 MiB 0.0 s collect-memo hits 0, collect epochs 0 collect-dirty 0 tracker waits 0 / 7 | arena 0x200000000+0xfa00000000 image 0x7ff6d4780000+0x59000 forgets 0 (0 MiB) | read callers: | write callers: | read sites:
+[buffers] descriptor elements bound: 0 total, 0 written, 0 read-only; 0 pending-write notes skipped
+[src/Texture.cpp:711 StorageTexture] StorageTexture address=0x200010000 128x128 mips=1 mip=0 layers=0 base=0 dim=1 tile=0 format=56 vk=37
+[rescache] revalidate 1 calls 0.0 ms: fast 1, full 0, failed 0; fast-fail by reason:; full walks: T1 refreshed 0 (0 storage images, 0 view sources, 0 views served by their own pending source, 0 overlaps left by the refresh accepted), full by reason:, T1 fallback by reason:, proofs verified 0; fast-fail pending image: own 0 (the query excepts the own object), foreign 0, snapshot 0, T1 eligible 0; keys proven: 0 sampled, 0 storage; epoch gate: 0 registry scans skipped, 0 import loops skipped; lookup memo (APS5_LOOKUP_MEMO, cumulative): 0 hits, 0 misses
+[gpu] storage image 0x200000000: guest memory changed while GPU results were pending; keeping the CPU's blocks
+[gpu] storage image 0x200010000: guest memory changed while GPU results were pending; keeping the CPU's blocks
+Alternating render-pass GPU readback passed, 6 leading draw barriers merged
+
+FATAL: unhandled exception 0xc0000005 on thread 45788 ''
+  rip 0x00007ffc36f2a650
+  execute of 0x00007ffc36f2a650
+  rax 00000238a128e338 rbx 00000238a1257990 rcx 00000238a19500d0 rdx 00007ffc060ce178
+  rsi 00000238e1df23b0 rdi 00000238a1258298 rbp 000000eeba7fef50 rsp 000000eeba7feeb8
+  r8  0000000000000042 r9  00000238a126c8d0 r10 0000000000000000 r11 0000000000000030
+  r12 00007ffc36f2a650 r13 0000000000000001 r14 000000eeba7ff108 r15 00000238a125adf0
+  [rax] 0000000000000127 00000053b6a2c56a 88001d561b6b0612 0000000000000000 0000000000000000 ffffffff00000000 80001e001b150610 00000045d977cad0
+  [rbx] 00000238a1257990 00000238a1257980 00000238a19500d0 00000238e163e2d0 00000238a18514d0 00000238a18528d0 00007ffc36f2a650 00007ffc36f2f2b0
+  [rdx] 6f72747365446b76 69566567616d4979 0000000000007765 7061726720434741 696d203a73636968 755620676e697373 6e7566206e616b6c 00203a6e6f697463
+  [rsi] 0000023800000001 00000238a1258298 0000000000000000 0000000000000000 0000000000000001 0000002500000000 00000238a17772d0 90008c341d6d7a18
+  [rdi] 0000000000000000 00000238e1df23b0 00000238e1df23b0 00000238e1df23b0 0000000000000001 0000000000000000 0000000000000000 0000000000000000
+  [r14] 000000eeba7ff0f0 0000000000000000 00007ffd38f80000 0000000000000000 000000eeba800000 00007ffc062315e8 000000eeba5f9000 000000300000000d
+  [r15] 3ffe3da75fbce88f 3ffe3db60374e88f 3ffe3db60364e88f 3ffe3db0ffece88f 3ffe3db0ffd4e88f 3ffe3db0f3ace88f 3ffe3db0f3bce88f 3ffe3db0f014e88f
+  frame pointer chain:
+    #0 0x00007ffc05baa89c libSceAgcDriver.prx+0x1ba89c
+    #1 0x00007ffc05facb2e libSceAgcDriver.prx+0x5bcb2e
+  stack return address candidates:
+    [rsp+0x0] 0x00007ffc05baa5ab libSceAgcDriver.prx+0x1ba5ab
+    [rsp+0x40] 0x00007ffd080d46cb libwinpthread-1.dll+0x46cb
+    [rsp+0xa0] 0x00007ffc05baa89c libSceAgcDriver.prx+0x1ba89c
+    [rsp+0xf0] 0x00007ffc05facb2e libSceAgcDriver.prx+0x5bcb2e
+    [rsp+0x120] 0x00007ffc05b37d88 libSceAgcDriver.prx+0x147d88
+    [rsp+0x140] 0x00007ffd3c892d7b ucrtbase.dll+0x12d7b
+    [rsp+0x170] 0x00007ffd3c8c9c85 ucrtbase.dll+0x49c85
+    [rsp+0x190] 0x00007ffd3c889341 ucrtbase.dll+0x9341
+    [rsp+0x1a0] 0x00007ffd3effe5a8 ntdll.dll+0x7e5a8
+    [rsp+0x1c0] 0x00007ffd3c8c98a7 ucrtbase.dll+0x498a7
+    [rsp+0x1e8] 0x00007ffc059f12ef libSceAgcDriver.prx+0x12ef
+    [rsp+0x1f0] 0x00007ffd3c8c985d ucrtbase.dll+0x4985d
+    [rsp+0x230] 0x00007ffc059f12a4 libSceAgcDriver.prx+0x12a4
+    [rsp+0x2a0] 0x00007ffd3ef9b34f ntdll.dll+0x1b34f
+    [rsp+0x300] 0x00007ffc059f13e6 libSceAgcDriver.prx+0x13e6
+    [rsp+0x340] 0x00007ffd3f09e04a ntdll.dll+0x11e04a
+  recently popped return address candidates:
+    [rsp-0x30] 0x00007ffd3efb7d68 ntdll.dll+0x37d68
+    [rsp-0x40] 0x00007ffd080d43d1 libwinpthread-1.dll+0x43d1
+    [rsp-0x60] 0x00007ffc1c80ce8d libgcc_s_seh-1.dll+0x1ce8d
+    [rsp-0xb0] 0x00007ffd080d8960 libwinpthread-1.dll+0x8960
+    [rsp-0x100] 0x00007ffd3c8850d9 ucrtbase.dll+0x50d9
+    [rsp-0x120] 0x00007ffd080d8b31 libwinpthread-1.dll+0x8b31
+    [rsp-0x130] 0x00007ffd080d8d5f libwinpthread-1.dll+0x8d5f
+    [rsp-0x2f0] 0x00007ffd3efb2144 ntdll.dll+0x32144
+    [rsp-0x3c0] 0x00007ffd3efb2998 ntdll.dll+0x32998
+    [rsp-0x740] 0x00007ffd3f0e57fe ntdll.dll+0x1657fe
+  code addresses above rdi (0x238a1258298):
+  code addresses above rsi (0x238e1df23b0):
+  code addresses above rbx (0x238a1257990):
+  code addresses above r14 (0xeeba7ff108):
+    [+0x50] 0x00007ffd3ef9b34f ntdll.dll+0x1b34f
+    [+0xb0] 0x00007ffc059f13e6 libSceAgcDriver.prx+0x13e6
+    [+0xf0] 0x00007ffd3f09e04a ntdll.dll+0x11e04a
+    [+0x120] 0x00007ffd3ef9b2e3 ntdll.dll+0x1b2e3
+    [+0x170] 0x00007ffd3efb7d68 ntdll.dll+0x37d68
+    [+0x230] 0x00007ffd3efffb10 ntdll.dll+0x7fb10
+    [+0x240] 0x00007ffd3efa78b0 ntdll.dll+0x278b0
+    [+0x280] 0x00007ffc499df4a7 nvspcap64.dll+0xdf4a7
+    [+0x2b0] 0x00007ffc499cc585 nvspcap64.dll+0xcc585
+    [+0x318] 0x00007ffc05f454c9 libSceAgcDriver.prx+0x5554c9
+    [+0x320] 0x00007ffd3ef9b69b ntdll.dll+0x1b69b
+    [+0x350] 0x00007ffc05f454c9 libSceAgcDriver.prx+0x5554c9
+    [+0x3c8] 0x00007ffc059f12ef libSceAgcDriver.prx+0x12ef
+    [+0x3f0] 0x00007ffd3f00027f ntdll.dll+0x8027f
+    [+0x408] 0x00007ffc05f454c9 libSceAgcDriver.prx+0x5554c9
+    [+0x410] 0x00007ffd3be7a370 powrprof.dll+0xa370
+    [+0x480] 0x00007ffd3f000255 ntdll.dll+0x80255
+    [+0x4d0] 0x00007ffd3effd8d4 ntdll.dll+0x7d8d4
+    [+0x500] 0x00007ffd3effef8e ntdll.dll+0x7ef8e
+    [+0x530] 0x00007ffd3ce3147b KERNEL32.DLL+0x4147b
+    [+0x560] 0x00007ffd3c920813 ucrtbase.dll+0xa0813
+    [+0x5c0] 0x00007ff6d47813d1 agc_driver_recorder_tests.exe+0x13d1
+    [+0x660] 0x00007ff6d4781080 agc_driver_recorder_tests.exe+0x1080
+    [+0x6a0] 0x00007ffd3ce1cdf7 KERNEL32.DLL+0x2cdf7
+  code addresses above r15 (0x238a125adf0):
+  all threads:

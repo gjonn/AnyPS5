@@ -1,3 +1,4 @@
+#include "prx/libSceAgcDriver/Execution/include/ProfileOutput.hpp"
 #include <cstdio>
 #include <algorithm>
 #include <string>
@@ -30,7 +31,7 @@ void NoteEopDelay(std::uint32_t queue, std::chrono::steady_clock::time_point sta
     const auto now = std::chrono::steady_clock::now();
     const auto ms = std::chrono::duration<double, std::milli>(now - start).count();
     static const bool traceGpu = std::getenv("APS5_TRACE_GPU") != nullptr;
-    if (traceGpu) std::fprintf(stderr, "[gpu] %.1f eop queue=0x%x after %.2f ms\n", AgcDriver::DriverDetail::TraceMs(), queue, ms);
+    if (traceGpu) AgcDriver::ProfilePrint_nid_no_patch("[gpu] %.1f eop queue=0x%x after %.2f ms\n", AgcDriver::DriverDetail::TraceMs(), queue, ms);
     std::lock_guard lock(mutex);
     auto& sum = sums[queue];
     ++sum.first;

@@ -265,6 +265,30 @@ void Registration(bool indirect) {
 
 int main(int argc, char** argv) {
     try {
+        if (argc == 2 && std::string_view(argv[1]) == "--control-flow-only") {
+            using namespace AgcDriver::DriverDetail;
+            ShaderSnapshot valid{0x1000, 0, 0, {0xbf810000u}, {}};
+            std::vector<std::future<void>> checks;
+            for (unsigned index = 0; index < 8; ++index)
+                checks.push_back(std::async(std::launch::async, [&] { ValidateShaderControlFlow(valid, 0); }));
+            for (auto& check : checks) check.get();
+            Require(valid.controlFlowValidation->entries.size() == 1, "repeated validation did not reuse the entry point");
+            ShaderSnapshot replaced{valid.codeAddress, 0, 0, {0xffffffffu}, {}};
+            ReuseShaderControlFlowValidation(replaced, valid);
+            for (unsigned index = 0; index < 2; ++index)
+                ExpectFailure([&] { ValidateShaderControlFlow(replaced, 0); }, "");
+            ShaderSnapshot alternate{valid.codeAddress, 0, 0, {0xffffffffu, 0xbf810000u}, {}};
+            ValidateShaderControlFlow(alternate, 1);
+            ExpectFailure([&] { ValidateShaderControlFlow(alternate, 0); }, "");
+            ExpectFailure([&] { ValidateShaderControlFlow(alternate, 2); }, "outside shader snapshot");
+            ValidateShaderControlFlow(valid, 0);
+            ShaderSnapshot metadataChanged{valid.codeAddress, 0x2000, 1, valid.code, {std::byte{7}}};
+            ReuseShaderControlFlowValidation(metadataChanged, valid);
+            Require(metadataChanged.controlFlowValidation == valid.controlFlowValidation, "metadata replacement lost unchanged code validation");
+            ValidateShaderControlFlow(metadataChanged, 0);
+            std::cout << "control-flow validation reuse, replacement, entry-point and concurrency checks passed\n";
+            return 0;
+        }
         Require(argc == 1 || (argc == 2 && (std::string_view(argv[1]) == "--indirect" || std::string_view(argv[1]) == "--fail-before-registration")), "invalid test arguments");
         auto device = OpenVulkanTestDevice();
         if (!device) return VulkanTestSkipped;

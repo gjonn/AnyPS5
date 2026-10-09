@@ -2,6 +2,7 @@
 #include "prx/libSceAgcDriver/Execution/include/CaptureTrace.hpp"
 #include "prx/libc/include/HostThreadLocal.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Recorder.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/PerformanceControls.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Resources.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Texture.hpp"
 #include "prx/libSceAgcDriver/Graphics/shaders/MeshArguments_spv.h"
@@ -20,6 +21,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <fstream>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -30,7 +32,43 @@
 
 namespace AgcDriver::Graphics {
 
+PerformanceControls& LivePerformanceControls() {
+    static PerformanceControls controls([] {
+        std::uint32_t flags = 0;
+        if (std::getenv("APS5_MERGE_DRAW_BARRIERS") != nullptr) flags |= PerformanceControls::MergeDrawBarriers;
+        const char* table = std::getenv("APS5_BDA_TABLE_DEVICE_LOCAL");
+        if (table != nullptr && std::string_view(table) == "1") flags |= PerformanceControls::BdaTableDeviceLocal;
+        return flags;
+    }());
+    return controls;
+}
+
 namespace {
+
+void refreshPerformanceControls() {
+    static const char* path = std::getenv("APS5_PERF_CONTROL");
+    if (path == nullptr) return;
+    static std::mutex mutex;
+    std::unique_lock lock(mutex, std::try_to_lock);
+    if (!lock.owns_lock()) return;
+    static auto nextPoll = std::chrono::steady_clock::time_point{};
+    const auto now = std::chrono::steady_clock::now();
+    if (now < nextPoll) return;
+    nextPoll = now + std::chrono::seconds(1);
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return;
+    std::array<char, 257> text{};
+    input.read(text.data(), text.size());
+    if (input.bad() || input.gcount() > 256) return;
+    auto& controls = LivePerformanceControls();
+    const auto before = controls.Get();
+    if (!controls.Apply({text.data(), static_cast<std::size_t>(input.gcount())})) return;
+    const auto after = controls.Get();
+    if (before != after)
+        std::fprintf(stderr, "[perf-controls] merge_draw_barriers=%u bda_table_device_local=%u\n",
+            (after & PerformanceControls::MergeDrawBarriers) != 0,
+            (after & PerformanceControls::BdaTableDeviceLocal) != 0);
+}
 
 Recorder* activeRecorder = nullptr;
 
@@ -1390,11 +1428,13 @@ void Recorder::endOpenRenderPass() {
     context.Resolved(&DeviceFunctions::cmdEndRenderPass, "vkCmdEndRenderPass")(open->commands);
     // The pass's attachment and shader writes are visible to everything recorded after it (the
     // host sees them at the batch's fence).
-    recordBarrier(open->commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+    VkAccessFlags covered = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    if (MergeDrawBarriers() && !pass.afterPass) covered |= DrawBarrierAccess;
+    recordBarrier(open->commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, covered);
     CountBarriers(CommandClass::Draw);
     if (pass.afterPass) pass.afterPass(open->commands);
     EndGpuTiming(pass.timing);
-    open->coveredAccess = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    open->coveredAccess = covered;
     open->hostReadOwed = true;
     pass = {};
 }
@@ -1771,9 +1811,17 @@ bool Recorder::MergeBarriers() {
     return merge;
 }
 
+bool Recorder::MergeDrawBarriers() {
+    return (LivePerformanceControls().Get() & PerformanceControls::MergeDrawBarriers) != 0 && MergeBarriers();
+}
+
 void Recorder::CountMerged(CommandClass which) {
     if (!DrawOrGpuProfiled()) return;
     classMerged[static_cast<std::size_t>(which)].fetch_add(1, std::memory_order_relaxed);
+}
+
+std::uint64_t Recorder::MergedBarriers(CommandClass which) {
+    return classMerged[static_cast<std::size_t>(which)].load(std::memory_order_relaxed);
 }
 
 bool Recorder::BarrierValidate() {
@@ -1825,6 +1873,7 @@ void Recorder::NoteAccess(CommandClass which, const Access& access) {
 }
 
 void Recorder::CountPresent() {
+    refreshPerformanceControls();
     timingPresents.fetch_add(1, std::memory_order_relaxed);
     presentSerial.fetch_add(1, std::memory_order_relaxed);
 }

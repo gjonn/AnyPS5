@@ -1,0 +1,638 @@
+diff --git a/core/libs/prx/libSceAgcDriver/tests/ShaderDiskCache.cpp b/core/libs/prx/libSceAgcDriver/tests/ShaderDiskCache.cpp
+index cd3bddc089..97fa5408c8 100644
+--- a/core/libs/prx/libSceAgcDriver/tests/ShaderDiskCache.cpp
++++ b/core/libs/prx/libSceAgcDriver/tests/ShaderDiskCache.cpp
+@@ -192,13 +192,14 @@ CompiledVariant sampleVariant() {
+     image.r128 = true;
+     image.fmaskCompatible = false;
+     image.depthBitsCompatible = false;
++    image.foldTexelOffsetsOnly = true;
+     image.indirectRoot = 0;
+     image.indirectMappingOffset = 12;
+     image.indirectSearchIterations = 3;
+     image.indirectResources = {1, 2, 3};
+     info.info.images = {image};
+     ResourceMaterializer::PrepareImageModes(info.info);
+-    info.info.samplers = {{7, 0x10, 3, true, false, SamplerUseExplicitLod | SamplerUseGather}};
++    info.info.samplers = {{7, 0x10, 3, true, false, SamplerUseExplicitLod | SamplerUseGather, true}};
+     info.info.sampledPairs = {{0, 0, 0x10}};
+     StageInput input{};
+     input.kind = StageInputKind::GlobalInvocationId;
+diff --git a/core/libs/prx/libSceAgcDriver/tests/ShaderMemory.cpp b/core/libs/prx/libSceAgcDriver/tests/ShaderMemory.cpp
+index 767af1e141..6b25402e7e 100644
+--- a/core/libs/prx/libSceAgcDriver/tests/ShaderMemory.cpp
++++ b/core/libs/prx/libSceAgcDriver/tests/ShaderMemory.cpp
+@@ -1289,6 +1289,7 @@ void verifyUnnormalizedSamplers() {
+     constexpr std::uint32_t Format8888UNorm = 56;
+     constexpr std::uint32_t Format11_11_10UInt = 34;
+     constexpr std::uint32_t Format32Float = 22;
++    constexpr std::uint32_t Type1D = 8;
+     constexpr std::uint32_t Type2D = 9;
+     constexpr std::uint32_t Type3D = 10;
+     constexpr std::uint32_t TypeCube = 11;
+@@ -1314,7 +1315,7 @@ void verifyUnnormalizedSamplers() {
+     };
+     const std::array<std::uint32_t, 3> capabilities{1u, static_cast<std::uint32_t>(spv::CapabilityImageGatherExtended), static_cast<std::uint32_t>(spv::CapabilityMinLod)};
+     std::uint64_t nextAddress = 0x40000u;
+-    const auto recompile = [&](const std::vector<std::uint32_t>& code, const std::array<std::uint32_t, 16>& data, std::uint64_t address = 0u) {
++    const auto recompile = [&](const std::vector<std::uint32_t>& code, const std::array<std::uint32_t, 16>& data, std::uint64_t address = 0u, bool offsets = false) {
+         RecompileRequest request{};
+         request.shader = {ShaderStage::Compute, address != 0u ? address : (nextAddress += 0x1000u), code, 0, {}};
+         request.context.waveSize = 32;
+@@ -1326,6 +1327,7 @@ void verifyUnnormalizedSamplers() {
+         request.target.subgroupSize = 32;
+         request.target.supportedCapabilities = capabilities;
+         request.target.fragmentShaderBarycentricEnabled = false;
++        request.target.nonConstantImageOffsets = offsets;
+         request.layout.pushConstantSizeBytes = 128;
+         AgcDriver::ShaderMemory memory({});
+         static_cast<void>(memory.Capture(request));
+@@ -1374,7 +1376,6 @@ void verifyUnnormalizedSamplers() {
+     const auto reject = [&](std::uint32_t mimg, const std::array<std::uint32_t, 16>& data, const char* reason, const char* what) {
+         expectFailure([&] { static_cast<void>(recompile(program(mimg), data)); }, reason, what);
+     };
+-    reject(0xf0c00f08u, userData(unnormalized), "unnormalized guest sampler is used with a texel offset, which is not implemented", "unnormalized samplers: image_sample_o was accepted");
+     reject(0xf0bc0f08u, imageData(unnormalized, Type2D, Format32Float, 0u), "unnormalized guest sampler is used with depth comparison, which is not implemented", "unnormalized samplers: image_sample_c_lz was accepted");
+     reject(0xf11c0108u, userData(unnormalized), "unnormalized guest sampler is used by a gather, which is not implemented", "unnormalized samplers: image_gather4_lz was accepted");
+     reject(0xf1800308u, userData(unnormalized), "unnormalized guest sampler is used by image_get_lod, which is not implemented", "unnormalized samplers: image_get_lod was accepted");
+@@ -1384,10 +1385,73 @@ void verifyUnnormalizedSamplers() {
+     reject(0xf09c0f10u, imageData(unnormalized, Type3D, Format8888UNorm, 3u), "unnormalized guest sampler samples a 1D-array, 2D-array, 3D, cube or multisampled image", "unnormalized samplers: a 3D T# was accepted");
+     reject(0xf09c0f28u, imageData(unnormalized, Type2DArray, Format8888UNorm, 5u), "unnormalized guest sampler samples a 1D-array, 2D-array, 3D, cube or multisampled image", "unnormalized samplers: a 2D-array sample was accepted");
+     reject(0xf09c0f08u, imageData(unnormalized, Type2D, Format11_11_10UInt, 0u), "unnormalized guest sampler samples an image that needs a format conversion or packed access", "unnormalized samplers: a T# with a format conversion was accepted");
++    reject(0xf15c0108u, userData(unnormalized), "unnormalized guest sampler is used by a gather, which is not implemented", "unnormalized samplers: image_gather4_lz_o was accepted");
++    reject(0xf0fc0f08u, imageData(unnormalized, Type2D, Format32Float, 0u), "unnormalized guest sampler is used with depth comparison, which is not implemented", "unnormalized samplers: image_sample_c_lz_o was accepted");
++    reject(0xf0dc0f28u, imageData(unnormalized, Type2DArray, Format8888UNorm, 5u), "unnormalized guest sampler samples a 1D-array, 2D-array, 3D, cube or multisampled image", "unnormalized samplers: a 2D-array image_sample_lz_o was accepted");
+     for (const std::uint32_t mimg : {0xf0c00f08u, 0xf11c0108u, 0xf09c0f18u}) {
+         static_cast<void>(recompile(program(mimg), imageData(normalized, mimg == 0xf09c0f18u ? TypeCube : Type2D, Format8888UNorm, mimg == 0xf09c0f18u ? 5u : 0u)));
+     }
+ 
++    const auto offsetProgram = [](std::uint32_t mimg, std::uint32_t offsetSource, std::uint32_t literal) {
++        std::vector<std::uint32_t> code{0x7e020200u | offsetSource};
++        if (offsetSource == 0xffu) code.push_back(literal);
++        code.insert(code.end(), {0x7e040280u, 0x7e060280u, 0x7e080280u, 0x7e0a0280u, 0x7e0c0280u, mimg, 0x00400801u, 0xe0700000u, 0x80030800u, 0xbf810000u});
++        return code;
++    };
++    const auto foldedSamples = [](const std::vector<std::uint32_t>& words) {
++        std::vector<std::uint32_t> exact;
++        std::vector<std::uint32_t> sums;
++        std::vector<std::uint32_t> coordinates;
++        for (std::size_t cursor = 5; cursor < words.size();) {
++            const auto count = words[cursor] >> 16u;
++            require(count != 0 && count <= words.size() - cursor, "unnormalized texel offsets: truncated SPIR-V instruction");
++            const auto op = words[cursor] & 0xffffu;
++            if (op == spv::OpDecorate && count == 3u && words[cursor + 2] == spv::DecorationNoContraction) exact.push_back(words[cursor + 1]);
++            if (op == spv::OpFAdd) sums.push_back(words[cursor + 2]);
++            if (op == spv::OpImageSampleExplicitLod) coordinates.push_back(words[cursor + 4]);
++            cursor += count;
++        }
++        return !coordinates.empty() && std::ranges::all_of(coordinates, [&](std::uint32_t id) { return std::ranges::count(sums, id) != 0 && std::ranges::count(exact, id) != 0; });
++    };
++    const auto sampleMasks = [](const std::vector<std::uint32_t>& words) {
++        std::vector<std::uint32_t> masks;
++        for (std::size_t cursor = 5; cursor < words.size();) {
++            const auto count = words[cursor] >> 16u;
++            require(count != 0 && count <= words.size() - cursor, "unnormalized texel offsets: truncated SPIR-V instruction");
++            if ((words[cursor] & 0xffffu) == spv::OpImageSampleExplicitLod && count > 5u) masks.push_back(words[cursor + 5]);
++            cursor += count;
++        }
++        return masks;
++    };
++    for (const std::uint32_t source : {0xffu, 0x100u}) {
++        const auto oneD = recompile(offsetProgram(0xf0dc0f00u, source, 0x3du), imageData(unnormalized, Type1D, Format8888UNorm, 0u));
++        require(proven(oneD, true), "unnormalized texel offsets: a 1D image_sample_lz_o through an unnormalized S# was not flagged");
++        auditSpirv(oneD.spirv.Words());
++        require(foldedSamples(oneD.spirv.Words()), "unnormalized texel offsets: a 1D offset was not added to the coordinate");
++    }
++    const auto constantLz = offsetProgram(0xf0dc0f08u, 0xffu, 0x3du | (2u << 8u));
++    const auto foldedLz = recompile(constantLz, userData(unnormalized), 0x48000u);
++    require(proven(foldedLz, true), "unnormalized texel offsets: image_sample_lz_o through an unnormalized S# was not flagged");
++    auditSpirv(foldedLz.spirv.Words());
++    require(foldedSamples(foldedLz.spirv.Words()), "unnormalized texel offsets: a constant offset was not added to the coordinates");
++    const auto operandLz = recompile(constantLz, userData(normalized), 0x48000u);
++    require(proven(operandLz, false) && operandLz.variantId == foldedLz.variantId && operandLz.PipelineVariantId() != foldedLz.PipelineVariantId(), "unnormalized texel offsets: a normalized S# did not get its own specialization of the shared artifact");
++    require(sampleMasks(operandLz.spirv.Words()) == std::vector<std::uint32_t>{spv::ImageOperandsLodMask | spv::ImageOperandsConstOffsetMask} && !foldedSamples(operandLz.spirv.Words()), "unnormalized texel offsets: a normalized image_sample_lz_o lost its ConstOffset operand");
++    require(recompile(constantLz, userData(unnormalized), 0x48000u).PipelineVariantId() == foldedLz.PipelineVariantId(), "unnormalized texel offsets: the unnormalized S# did not reuse its specialization");
++    for (const std::uint32_t mimg : {0xf0dc0f08u, 0xf0d00f08u, 0xf0c00f08u, 0xf0d40f08u, 0xf0c40f08u}) {
++        const auto computed = offsetProgram(mimg, 0x100u, 0u);
++        for (const bool offsets : {false, true}) {
++            const auto result = recompile(computed, userData(unnormalized), 0u, offsets);
++            require(proven(result, true), "unnormalized texel offsets: a compute image_sample_lz_o, _l_o, _o, _b_o or _cl_o with a computed offset was not flagged");
++            auditSpirv(result.spirv.Words());
++            require(foldedSamples(result.spirv.Words()), "unnormalized texel offsets: a computed offset was not added to the coordinates");
++        }
++        expectFailure([&] { static_cast<void>(recompile(computed, userData(normalized))); }, "normalized guest sampler is used with a texel offset that is not a constant", "unnormalized texel offsets: a normalized computed offset was accepted without maintenance8");
++        expectFailure([&] { static_cast<void>(recompile(computed, imageData(unnormalized, Type2D, Format11_11_10UInt, 0u))); }, "takes only images an unnormalized S# can sample", "unnormalized texel offsets: a computed offset sampled a converted image without maintenance8");
++        const auto masks = sampleMasks(recompile(computed, userData(normalized), 0u, true).spirv.Words());
++        require(!masks.empty() && std::ranges::all_of(masks, [](std::uint32_t mask) { return (mask & spv::ImageOperandsOffsetMask) != 0u; }), "unnormalized texel offsets: a normalized computed offset lost its Offset operand");
++    }
++
+     const std::array<std::uint32_t, 5> pixelCode{0xf0800f08u, 0x00400801u, 0xf800180fu, 0x0b0a0908u, 0xbf810000u};
+     const auto pixelData = userData(unnormalized);
+     RecompileRequest pixel{};
+@@ -1433,9 +1497,21 @@ void verifyUnusedUnnormalizedSampler() {
+     auto compared = info;
+     compared.samplers[0].depthCompare = true;
+     expectFailure([&] { static_cast<void>(populate(compared)); }, "unnormalized guest sampler is used with depth comparison, which is not implemented", "unnormalized samplers: a depth-compare S# without live uses was accepted");
++    auto offset = info;
++    offset.samplers[0].uses = SamplerUseExplicitLod | SamplerUseOffset;
++    const auto folded = populate(offset);
++    require(folded[0].imageUnnormalized == std::vector<bool>{true} && folded[1].samplerUnnormalized == std::vector<bool>{true}, "unnormalized samplers: an offset use was not flagged");
++    auto gathered = offset;
++    gathered.samplers[0].uses |= SamplerUseGather;
++    expectFailure([&] { static_cast<void>(populate(gathered)); }, "unnormalized guest sampler is used by a gather, which is not implemented", "unnormalized samplers: an offset gather was accepted");
++    auto foldOnly = offset;
++    foldOnly.samplers[0].foldTexelOffsetsOnly = true;
++    static_cast<void>(populate(foldOnly));
+     snapshot.samplers[0].dwords[0] = 0x00000092u;
+     const auto normalized = populate(info);
+     require(normalized[0].imageUnnormalized == std::vector<bool>{false} && normalized[1].samplerUnnormalized == std::vector<bool>{false}, "unnormalized samplers: a normalized S# was flagged");
++    static_cast<void>(populate(offset));
++    expectFailure([&] { static_cast<void>(populate(foldOnly)); }, "normalized guest sampler is used with a texel offset that is not a constant", "unnormalized samplers: a normalized S# was accepted for an offset that only folds");
+ }
+ 
+ void verifyWaveUniformValues() {
+diff --git a/core/libs/prx/libSceAgcDriver/tests/execution/ImageSampleUnnormalized.cpp b/core/libs/prx/libSceAgcDriver/tests/execution/ImageSampleUnnormalized.cpp
+index cc0385031a..540a1690f3 100644
+--- a/core/libs/prx/libSceAgcDriver/tests/execution/ImageSampleUnnormalized.cpp
++++ b/core/libs/prx/libSceAgcDriver/tests/execution/ImageSampleUnnormalized.cpp
+@@ -42,7 +42,27 @@ alignas(256) constexpr std::array<std::uint32_t, 40> Code{
+     0x80001001, 0xe0701034, 0x80001101, 0xe0701038, 0x80001201, 0xe070103c, 0x80001301, 0xbf810000,
+ };
+ 
+-constexpr std::array<const char*, 3> Instructions{"image_sample_lz", "image_sample_l 2.7", "image_sample"};
++alignas(256) constexpr std::array<std::uint32_t, 45> OffsetCode{
++    0x34020086, 0xe0301008, 0x80000201, 0xe0301000, 0x80000301, 0xe0301004, 0x80000401, 0xbf8c3f70,
++    0x7e0a02ff, 0x402ccccd, 0x7e2802ff, 0x0000023d, 0xf0dc0f08, 0x00610802, 0xf0d00f08, 0x00610c02,
++    0xf0dc0f0a, 0x00611014, 0x00000403, 0xbf8c3f70, 0xe0701010, 0x80000801, 0xe0701014, 0x80000901,
++    0xe0701018, 0x80000a01, 0xe070101c, 0x80000b01, 0xe0701020, 0x80000c01, 0xe0701024, 0x80000d01,
++    0xe0701028, 0x80000e01, 0xe070102c, 0x80000f01, 0xe0701030, 0x80001001, 0xe0701034, 0x80001101,
++    0xe0701038, 0x80001201, 0xe070103c, 0x80001301, 0xbf810000,
++};
++
++enum class Offset { None, Lane, Constant };
++constexpr std::int32_t ConstantOffsetU = -3;
++constexpr std::int32_t ConstantOffsetV = 2;
++
++struct Program {
++    std::span<const std::uint32_t> code;
++    std::array<const char*, 3> instructions;
++    std::array<Offset, 3> offsets;
++};
++
++const Program Plain{Code, {"image_sample_lz", "image_sample_l 2.7", "image_sample"}, {Offset::None, Offset::None, Offset::None}};
++const Program Offsets{OffsetCode, {"image_sample_lz_o", "image_sample_l_o 2.7", "image_sample_lz_o (-3, 2) NSA"}, {Offset::Lane, Offset::Lane, Offset::Constant}};
+ 
+ struct SamplerCase {
+     const char* name;
+@@ -62,6 +82,8 @@ constexpr std::array<SamplerCase, 5> Samplers{{
+ struct Coordinate {
+     float u;
+     float v;
++    std::int32_t du = 0;
++    std::int32_t dv = 0;
+ };
+ 
+ std::vector<Coordinate> Coordinates() {
+@@ -85,6 +107,17 @@ std::vector<Coordinate> Coordinates() {
+     return result;
+ }
+ 
++std::vector<Coordinate> OffsetCoordinates() {
++    constexpr std::array<std::int32_t, 7> us{-32, -5, -1, 0, 1, 3, 31};
++    constexpr std::array<std::int32_t, 6> vs{-2, -1, 0, 2, -32, 31};
++    auto result = Coordinates();
++    for (std::size_t index = 0; index < result.size(); ++index) {
++        result[index].du = us[index % us.size()];
++        result[index].dv = vs[index % vs.size()];
++    }
++    return result;
++}
++
+ std::array<double, 4> TexelOf(std::int32_t x, std::int32_t y) {
+     return {240.0 * ((x + y) & 1), 16.0 * x + 16.0, 32.0 * y + 32.0, 240.0};
+ }
+@@ -128,7 +161,7 @@ std::array<std::uint32_t, 8> TextureDescriptor(const void* data, std::uint32_t l
+ 
+ using Samples = std::vector<std::array<std::uint32_t, Results>>;
+ 
+-Samples Run(AgcDriver::VulkanDevice& device, const std::array<std::uint32_t, 8>& texture, const std::array<std::uint32_t, 4>& sampler, const std::vector<Coordinate>& coordinates) {
++Samples Run(AgcDriver::VulkanDevice& device, const Program& program, const std::array<std::uint32_t, 8>& texture, const std::array<std::uint32_t, 4>& sampler, const std::vector<Coordinate>& coordinates) {
+     Samples samples;
+     for (std::size_t first = 0; first < coordinates.size(); first += Threads) {
+         Buffer.fill(0xdeadbeefu);
+@@ -136,13 +169,14 @@ Samples Run(AgcDriver::VulkanDevice& device, const std::array<std::uint32_t, 8>&
+             const auto coordinate = first + lane < coordinates.size() ? coordinates[first + lane] : Coordinate{0.5f, 0.5f};
+             Buffer[lane * Words] = std::bit_cast<std::uint32_t>(coordinate.u);
+             Buffer[lane * Words + 1u] = std::bit_cast<std::uint32_t>(coordinate.v);
++            Buffer[lane * Words + 2u] = 0xffffc0c0u | (static_cast<std::uint32_t>(coordinate.du) & 0x3fu) | ((static_cast<std::uint32_t>(coordinate.dv) & 0x3fu) << 8u);
+         }
+         std::vector<std::uint32_t> userData(16, 0u);
+         const auto buffer = BufferDescriptor(Buffer.data(), static_cast<std::uint32_t>(Buffer.size() * 4u));
+         std::copy(buffer.begin(), buffer.end(), userData.begin());
+         std::copy(texture.begin(), texture.end(), userData.begin() + 4);
+         std::copy(sampler.begin(), sampler.end(), userData.begin() + 12);
+-        const std::span<const std::uint32_t> code(Code);
++        const auto code = program.code;
+         const std::array<ShaderRecompiler::MemoryRegion, 1> memory{{{reinterpret_cast<std::uintptr_t>(code.data()), std::as_bytes(code)}}};
+         const ShaderRecompiler::ShaderComputeStageInfo compute{{Threads, 1, 1}, 0u, {false, false, false}, false, 1};
+         ShaderRecompiler::RecompileRequest request{
+@@ -185,15 +219,19 @@ std::array<double, 4> Reference(const SamplerCase& sampler, const Coordinate& co
+     return result;
+ }
+ 
+-void Check(const SamplerCase& sampler, const char* image, const std::vector<Coordinate>& coordinates, const Samples& samples) {
++void Check(const Program& program, const SamplerCase& sampler, const char* image, const std::vector<Coordinate>& coordinates, const Samples& samples) {
+     Require(samples.size() == coordinates.size(), "image sample unnormalized: a dispatch lost samples");
+     const double tolerance = sampler.linear ? 0.5 : 0.25;
+     for (std::size_t index = 0; index < coordinates.size(); ++index) {
+-        const auto expected = Reference(sampler, coordinates[index]);
+-        for (std::uint32_t instruction = 0; instruction < Instructions.size(); ++instruction) {
++        const auto& coordinate = coordinates[index];
++        for (std::uint32_t instruction = 0; instruction < program.instructions.size(); ++instruction) {
++            const auto offset = program.offsets[instruction];
++            const std::int32_t du = offset == Offset::Lane ? coordinate.du : offset == Offset::Constant ? ConstantOffsetU : 0;
++            const std::int32_t dv = offset == Offset::Lane ? coordinate.dv : offset == Offset::Constant ? ConstantOffsetV : 0;
++            const auto expected = Reference(sampler, {coordinate.u + static_cast<float>(du), coordinate.v + static_cast<float>(dv)});
+             for (std::uint32_t component = 0; component < 4u; ++component) {
+                 const double value = static_cast<double>(std::bit_cast<float>(samples[index][instruction * 4u + component])) * 255.0;
+-                Require(std::fabs(value - expected[component]) <= tolerance, std::string(Instructions[instruction]) + ", " + sampler.name + ", " + image + ": (" + std::to_string(coordinates[index].u) + ", " + std::to_string(coordinates[index].v) + ") component " + std::to_string(component) + " is " + std::to_string(value) + ", expected " + std::to_string(expected[component]));
++                Require(std::fabs(value - expected[component]) <= tolerance, std::string(program.instructions[instruction]) + ", " + sampler.name + ", " + image + ": (" + std::to_string(coordinate.u) + ", " + std::to_string(coordinate.v) + ") offset (" + std::to_string(du) + ", " + std::to_string(dv) + ") component " + std::to_string(component) + " is " + std::to_string(value) + ", expected " + std::to_string(expected[component]));
+             }
+         }
+     }
+@@ -202,7 +240,7 @@ void Check(const SamplerCase& sampler, const char* image, const std::vector<Coor
+ void ExpectFailure(AgcDriver::VulkanDevice& device, const std::array<std::uint32_t, 8>& texture, const std::array<std::uint32_t, 4>& sampler, std::string_view reason, const char* what) {
+     const std::vector<Coordinate> one{{0.5f, 0.5f}};
+     try {
+-        static_cast<void>(Run(device, texture, sampler, one));
++        static_cast<void>(Run(device, Plain, texture, sampler, one));
+     } catch (const std::exception& error) {
+         Require(std::string_view(error.what()).find(reason) != std::string_view::npos, std::string(what) + ": unexpected error: " + error.what());
+         return;
+@@ -221,12 +259,14 @@ int main() {
+         const auto coordinates = Coordinates();
+         const auto single = TextureDescriptor(SingleLevel.data(), 0u, 0u);
+         const auto multi = TextureDescriptor(MultiLevel.data(), 0u, StorageLevels - 1u);
++        const auto offsetCoordinates = OffsetCoordinates();
+         for (const auto& sampler : Samplers) {
+-            const auto singleSamples = Run(*device, single, sampler.words, coordinates);
+-            Check(sampler, "1-level image", coordinates, singleSamples);
+-            const auto multiSamples = Run(*device, multi, sampler.words, coordinates);
+-            Check(sampler, "first level of a 4-level image", coordinates, multiSamples);
++            const auto singleSamples = Run(*device, Plain, single, sampler.words, coordinates);
++            Check(Plain, sampler, "1-level image", coordinates, singleSamples);
++            const auto multiSamples = Run(*device, Plain, multi, sampler.words, coordinates);
++            Check(Plain, sampler, "first level of a 4-level image", coordinates, multiSamples);
+             Require(multiSamples == singleSamples, std::string(sampler.name) + ": the first level of a 4-level image does not sample like a 1-level image");
++            Check(Offsets, sampler, "1-level image", offsetCoordinates, Run(*device, Offsets, single, sampler.words, offsetCoordinates));
+         }
+         ExpectFailure(*device, TextureDescriptor(MultiLevel.data(), 2u, 2u), Samplers[0].words, "single-level", "a 3-level view");
+         ExpectFailure(*device, single, {0x00008092u, 0x00fff000u, 0x05100000u, 0u}, "different minification", "unequal minification and magnification filters");
+diff --git a/core/shader/recompiler/IntermediateRepresentation/include/IntermediateRepresentation/IrMetadata/Resources.hpp b/core/shader/recompiler/IntermediateRepresentation/include/IntermediateRepresentation/IrMetadata/Resources.hpp
+index aa631636b8..bb6882629d 100644
+--- a/core/shader/recompiler/IntermediateRepresentation/include/IntermediateRepresentation/IrMetadata/Resources.hpp
++++ b/core/shader/recompiler/IntermediateRepresentation/include/IntermediateRepresentation/IrMetadata/Resources.hpp
+@@ -83,6 +83,7 @@ struct ImageResource {
+     bool packed = false;
+     bool fmaskCompatible = true;
+     bool depthBitsCompatible = true;
++    bool foldTexelOffsetsOnly = false;
+     IrBufferFormat packedFormat = IrBufferFormat::Invalid;
+     std::uint32_t emulatedCompare = 0;
+     std::uint32_t indirectRoot = NoIndirectImage;
+@@ -117,10 +118,15 @@ struct SamplerResource {
+     bool forcePointFiltering = false;
+     bool depthCompare = false;
+     std::uint8_t uses = 0;
++    bool foldTexelOffsetsOnly = false;
+ 
+     bool operator==(const SamplerResource& other) const = default;
+ };
+ 
++inline bool FoldsTexelOffsets(const SamplerResource& sampler) {
++    return (sampler.uses & SamplerUseOffset) != 0u && (sampler.uses & ~static_cast<std::uint32_t>(SamplerUseExplicitLod | SamplerUseOffset)) == 0u && !sampler.depthCompare;
++}
++
+ struct SampledResourcePair {
+     std::uint32_t image = 0;
+     std::uint32_t sampler = 0;
+diff --git a/core/shader/recompiler/Optimization/include/Optimization/ResourceMaterializer.hpp b/core/shader/recompiler/Optimization/include/Optimization/ResourceMaterializer.hpp
+index 5bd14939ee..2dbf39823a 100644
+--- a/core/shader/recompiler/Optimization/include/Optimization/ResourceMaterializer.hpp
++++ b/core/shader/recompiler/Optimization/include/Optimization/ResourceMaterializer.hpp
+@@ -19,6 +19,7 @@ class ResourceMaterializer {
+     static std::vector<ImageResource> RuntimeImageModes(const ImageResource& image);
+     static std::uint32_t RuntimeImageMode(const ImageResource& image, const DescriptorValue& descriptor, std::span<const ImageResource> modes);
+     static void PrepareImageModes(ShaderInfo& info);
++    static const char* UnnormalizedSampleMismatch(const ImageResource& image);
+     [[nodiscard]] IrResourcePlan ExtractPlan(const IrProgram& program) const;
+     void Materialize(const IrResourcePlan& program, const SrtRuntime& runtime, ResourceSnapshot& snapshot) const;
+     static std::uint64_t SpecializationNanoseconds();
+diff --git a/core/shader/recompiler/Optimization/src/DescriptorBindingBuilder.cpp b/core/shader/recompiler/Optimization/src/DescriptorBindingBuilder.cpp
+index 0005d4c465..ed555a7e07 100644
+--- a/core/shader/recompiler/Optimization/src/DescriptorBindingBuilder.cpp
++++ b/core/shader/recompiler/Optimization/src/DescriptorBindingBuilder.cpp
+@@ -150,7 +150,6 @@ const char* UnnormalizedUseReason(std::uint32_t uses) {
+     switch (uses & (~uses + 1u)) {
+         case SamplerUseImplicitLod: return "is used by an implicit-LOD sample";
+         case SamplerUseGradient: return "is used by a sample with derivatives";
+-        case SamplerUseOffset: return "is used with a texel offset";
+         case SamplerUseCompare: return "is used with depth comparison";
+         case SamplerUseGather: return "is used by a gather";
+         case SamplerUseQueryLod: return "is used by image_get_lod";
+@@ -167,11 +166,14 @@ UnnormalizedProof ProveUnnormalized(const ShaderInfo& info, const ResourceSnapsh
+     UnnormalizedProof proof{std::vector<bool>(info.samplers.size()), std::vector<bool>(info.images.size())};
+     for (std::uint32_t r = 0; r < info.samplers.size(); r++) {
+         if (snapshot.samplers.at(r).dwordCount != 4u) fail("sampler descriptor must contain four dwords");
++        const auto& sampler = info.samplers[r];
+         if ((snapshot.samplers[r].dwords[0] & ForceUnnormalizedBit) == 0u) {
++            if (sampler.foldTexelOffsetsOnly) {
++                fail("DescriptorBindingBuilder::Populate normalized guest sampler is used with a texel offset that is not a constant, which image sampling takes only with VK_KHR_maintenance8 and shaderImageGatherExtended");
++            }
+             continue;
+         }
+-        const auto& sampler = info.samplers[r];
+-        const std::uint32_t unsupported = sampler.uses & ~static_cast<std::uint32_t>(SamplerUseExplicitLod);
++        const std::uint32_t unsupported = sampler.uses & ~static_cast<std::uint32_t>(SamplerUseExplicitLod | SamplerUseOffset);
+         if (unsupported != 0u) {
+             failUnnormalized(UnnormalizedUseReason(unsupported));
+         }
+@@ -184,17 +186,8 @@ UnnormalizedProof ProveUnnormalized(const ShaderInfo& info, const ResourceSnapsh
+             }
+             const auto& base = info.images.at(pair.image);
+             const auto& image = info.runtimeImageModes.at(pair.image).at(ResourceMaterializer::RuntimeImageMode(base, snapshot.images.at(pair.image), info.runtimeImageModes.at(pair.image)));
+-            if (image.indirectRoot != ImageResource::NoIndirectImage) {
+-                failUnnormalized("samples an image selected at run time");
+-            }
+-            if ((image.dimension != RdnaImageDimension::Dim1D && image.dimension != RdnaImageDimension::Dim2D) || image.cube) {
+-                failUnnormalized("samples a 1D-array, 2D-array, 3D, cube or multisampled image");
+-            }
+-            if (image.depthCompare) {
+-                failUnnormalized("is used with depth comparison");
+-            }
+-            if (image.conversionFormat != IrBufferFormat::Invalid || image.packed) {
+-                failUnnormalized("samples an image that needs a format conversion or packed access");
++            if (const auto* reason = ResourceMaterializer::UnnormalizedSampleMismatch(image)) {
++                failUnnormalized(reason);
+             }
+             proof.images[pair.image] = true;
+         }
+@@ -250,6 +243,9 @@ DescriptorBindingPlan DescriptorBindingBuilder::Prepare(const IrBindingLayout& l
+     if (info.images.size() > ShaderInfo::MaxImages) fail("runtime image count exceeds the static capacity");
+     DescriptorBindingPlan plan;
+     const auto unnormalized = ProveUnnormalized(info, snapshot);
++    for (std::uint32_t index = 0; index < info.samplers.size(); ++index) {
++        if (FoldsTexelOffsets(info.samplers[index])) plan.specialization.push_back({PipelineSpecialization::FoldOffsetBase + index, unnormalized.samplers[index] ? 1u : 0u});
++    }
+     std::vector<std::uint32_t> compareStates(info.images.size());
+     for (std::uint32_t index = 0; index < info.images.size(); ++index) {
+         if (!info.images[index].depthCompare) continue;
+diff --git a/core/shader/recompiler/Optimization/src/ResourceMaterializer.cpp b/core/shader/recompiler/Optimization/src/ResourceMaterializer.cpp
+index a9338ee07f..a5e3f8ce98 100644
+--- a/core/shader/recompiler/Optimization/src/ResourceMaterializer.cpp
++++ b/core/shader/recompiler/Optimization/src/ResourceMaterializer.cpp
+@@ -677,9 +677,20 @@ std::vector<ImageResource> ResourceMaterializer::RuntimeImageModes(const ImageRe
+         }
+     }
+     if (modes.empty()) throw std::runtime_error("image instruction has no supported runtime modes");
++    if (image.foldTexelOffsetsOnly && std::ranges::any_of(modes, [](const ImageResource& mode) { return UnnormalizedSampleMismatch(mode) == nullptr; })) {
++        std::erase_if(modes, [](const ImageResource& mode) { return UnnormalizedSampleMismatch(mode) != nullptr; });
++    }
+     return modes;
+ }
+ 
++const char* ResourceMaterializer::UnnormalizedSampleMismatch(const ImageResource& image) {
++    if (image.indirectRoot != ImageResource::NoIndirectImage) return "samples an image selected at run time";
++    if ((image.dimension != RdnaImageDimension::Dim1D && image.dimension != RdnaImageDimension::Dim2D) || image.cube) return "samples a 1D-array, 2D-array, 3D, cube or multisampled image";
++    if (image.depthCompare) return "is used with depth comparison";
++    if (image.conversionFormat != IrBufferFormat::Invalid || image.packed) return "samples an image that needs a format conversion or packed access";
++    return nullptr;
++}
++
+ std::uint32_t ResourceMaterializer::RuntimeImageMode(const ImageResource& image, const DescriptorValue& descriptor, std::span<const ImageResource> modes) {
+     if (descriptor.dwordCount != 8u) throw std::runtime_error("runtime image descriptor must contain eight dwords");
+     if (modes.empty()) throw std::runtime_error("prepared runtime image modes are missing");
+@@ -710,6 +721,7 @@ std::uint32_t ResourceMaterializer::RuntimeImageMode(const ImageResource& image,
+         if (mode.numericClass == decoded.numericClass && mode.dimension == decoded.dimension && mode.conversionFormat == decoded.conversionFormat && mode.packedFormat == decoded.packedFormat && mode.cube == decoded.cube && mode.depthBits == decoded.depthBits && mode.depthUnorm16 == decoded.depthUnorm16 && mode.srgbDecode == decoded.srgbDecode) return index;
+     }
+     if (image.dimension == RdnaImageDimension::Dim1D && decoded.dimension != RdnaImageDimension::Dim1D) throw std::runtime_error("image address has too few coordinate components");
++    if (image.foldTexelOffsetsOnly) throw std::runtime_error("image sample with a texel offset that is not a constant takes only images an unnormalized S# can sample without VK_KHR_maintenance8 and shaderImageGatherExtended");
+     throw std::runtime_error("image descriptor is incompatible with the static runtime image interface");
+ }
+ 
+@@ -726,12 +738,17 @@ void ResourceMaterializer::ApplyStaticInterface(IrProgram& program, bool nativeS
+             for (const auto* inst : block->Instructions()) {
+                 if (inst->Opcode() != IrOpcode::ImageSampleRaw) continue;
+                 const auto& memory = resources.memoryInfo.at(inst->Flags<MemoryFlags>().index);
+-                if ((memory.imageSampleFlags & (RdnaImageSampleFlagCompare | RdnaImageSampleFlagOffset)) != (RdnaImageSampleFlagCompare | RdnaImageSampleFlagOffset)) continue;
++                if ((memory.imageSampleFlags & RdnaImageSampleFlagOffset) == 0u) continue;
+                 const auto* address = inst->Argument(2)->Resolve();
+                 const auto component = GetRdnaImageAddressComponentLayout(memory.imageSampleFlags, 0u);
+                 const auto argument = component.bitOffset / 32u;
+                 if (component.bitWidth == 32u && argument < address->ArgumentCount() && address->Argument(argument)->Resolve()->HasImmediate()) continue;
+-                images.at(memory.resource).emulatedCompare |= EmulatedCompare::NativeOffsetUnsupported;
++                if ((memory.imageSampleFlags & RdnaImageSampleFlagCompare) != 0u) {
++                    images.at(memory.resource).emulatedCompare |= EmulatedCompare::NativeOffsetUnsupported;
++                } else {
++                    images.at(memory.resource).foldTexelOffsetsOnly = true;
++                    resources.info.samplers.at(memory.sampler).foldTexelOffsetsOnly = true;
++                }
+             }
+         }
+     }
+diff --git a/core/shader/recompiler/PipelineSpecialization.hpp b/core/shader/recompiler/PipelineSpecialization.hpp
+index 4b7fea929a..6b781cd305 100644
+--- a/core/shader/recompiler/PipelineSpecialization.hpp
++++ b/core/shader/recompiler/PipelineSpecialization.hpp
+@@ -30,6 +30,7 @@ inline constexpr std::uint32_t DescriptorIndexBase = 16384u;
+ inline constexpr std::uint32_t DescriptorIndexStride = 128u;
+ inline constexpr std::uint32_t ImageModeBase = 32768u;
+ inline constexpr std::uint32_t ImageModeStride = 256u;
++inline constexpr std::uint32_t FoldOffsetBase = 57344u;
+ 
+ inline constexpr std::uint32_t DescriptorIndex(std::uint32_t binding, std::uint32_t element) {
+     return DescriptorIndexBase + binding * DescriptorIndexStride + element;
+diff --git a/core/shader/recompiler/ShaderDiskCache.cpp b/core/shader/recompiler/ShaderDiskCache.cpp
+index 745ee40e63..26192d8826 100644
+--- a/core/shader/recompiler/ShaderDiskCache.cpp
++++ b/core/shader/recompiler/ShaderDiskCache.cpp
+@@ -472,6 +472,7 @@ void encodeInfo(Writer& writer, const CompiledShaderInfo& compiled) {
+         out.Value(image.packed);
+         out.Value(image.fmaskCompatible);
+         out.Value(image.depthBitsCompatible);
++        out.Value(image.foldTexelOffsetsOnly);
+         out.Value(image.packedFormat);
+         out.Value(image.emulatedCompare);
+         out.Value(image.indirectRoot);
+@@ -487,6 +488,7 @@ void encodeInfo(Writer& writer, const CompiledShaderInfo& compiled) {
+         out.Value(sampler.forcePointFiltering);
+         out.Value(sampler.depthCompare);
+         out.Value(sampler.uses);
++        out.Value(sampler.foldTexelOffsetsOnly);
+     });
+     writer.List(info.sampledPairs, [](Writer& out, const SampledResourcePair& pair) {
+         out.Value(pair.image);
+@@ -545,7 +547,7 @@ void decodeInfo(Reader& reader, CompiledShaderInfo& compiled) {
+         in.Value(buffer.scalar);
+         in.Value(buffer.typedAlignment);
+     });
+-    reader.List(info.images, 72, [](Reader& in, ImageResource& image) {
++    reader.List(info.images, 73, [](Reader& in, ImageResource& image) {
+         in.Value(image.source);
+         in.Value(image.firstUsePc);
+         in.Value(image.resourceClass);
+@@ -570,6 +572,7 @@ void decodeInfo(Reader& reader, CompiledShaderInfo& compiled) {
+         in.Value(image.packed);
+         in.Value(image.fmaskCompatible);
+         in.Value(image.depthBitsCompatible);
++        in.Value(image.foldTexelOffsetsOnly);
+         in.Value(image.packedFormat);
+         in.Value(image.emulatedCompare);
+         in.Value(image.indirectRoot);
+@@ -580,13 +583,14 @@ void decodeInfo(Reader& reader, CompiledShaderInfo& compiled) {
+     bool preparedImageModes = false;
+     reader.Value(preparedImageModes);
+     if (preparedImageModes) ResourceMaterializer::PrepareImageModes(info);
+-    reader.List(info.samplers, 15, [](Reader& in, SamplerResource& sampler) {
++    reader.List(info.samplers, 16, [](Reader& in, SamplerResource& sampler) {
+         in.Value(sampler.source);
+         in.Value(sampler.firstUsePc);
+         in.Value(sampler.copyOf);
+         in.Value(sampler.forcePointFiltering);
+         in.Value(sampler.depthCompare);
+         in.Value(sampler.uses);
++        in.Value(sampler.foldTexelOffsetsOnly);
+     });
+     reader.List(info.sampledPairs, 12, [](Reader& in, SampledResourcePair& pair) {
+         in.Value(pair.image);
+diff --git a/core/shader/recompiler/ShaderDiskCache.hpp b/core/shader/recompiler/ShaderDiskCache.hpp
+index d76dbde145..d8aa5338dc 100644
+--- a/core/shader/recompiler/ShaderDiskCache.hpp
++++ b/core/shader/recompiler/ShaderDiskCache.hpp
+@@ -12,7 +12,7 @@
+ 
+ namespace ShaderRecompiler::ShaderDiskCache {
+ 
+-inline constexpr std::uint32_t FormatVersion = 19;
++inline constexpr std::uint32_t FormatVersion = 20;
+ 
+ enum class LoadStatus {
+     Loaded,
+diff --git a/core/shader/recompiler/SpirvBackend/src/SpirvImageEmitter.cpp b/core/shader/recompiler/SpirvBackend/src/SpirvImageEmitter.cpp
+index 8f4bc0a0c8..ca9c1a2de7 100644
+--- a/core/shader/recompiler/SpirvBackend/src/SpirvImageEmitter.cpp
++++ b/core/shader/recompiler/SpirvBackend/src/SpirvImageEmitter.cpp
+@@ -467,6 +467,15 @@ std::uint32_t PackedOffset(SpirvValueEmitContext& ctx, const ImageEmitAccess& ac
+     return result;
+ }
+ 
++std::uint32_t FoldedOffsetCoord(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, const SampleSetup& setup) {
++    auto& state = ctx.state;
++    const auto components = setup.dimensionInfo.spatialComponents;
++    const auto type = components == 1u ? TypeF32(state) : TypeF32Vector(state, components);
++    const auto sum = Binary(state, spv::OpFAdd, type, setup.coord, Unary(state, spv::OpConvertSToF, type, PackedOffset(ctx, access, setup.layout)));
++    state.module.AddAnnotation(spv::OpDecorate, sum, spv::DecorationNoContraction);
++    return sum;
++}
++
+ std::uint32_t HorizontalOffsets(SpirvValueEmitContext& ctx, const ImageEmitAccess& access) {
+     auto& state = ctx.state;
+     const auto components = RdnaImageDimensionInfoFor(access.image.dimension).spatialComponents;
+@@ -1243,15 +1252,20 @@ void EmitSampleOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, con
+         const auto* value = access.address.Argument(argument)->Resolve();
+         return value->HasImmediate() ? value : nullptr;
+     };
+-    if (setup.layout.offset != NoImageComponent && constantOffset() == nullptr) {
+-        const bool gatherExtended = std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), static_cast<std::uint32_t>(spv::CapabilityImageGatherExtended)) != state.supportedCapabilities.end();
+-        if (!state.nonConstantImageOffsets || !gatherExtended) {
+-            ctx.Fail(access.inst, "has a texel offset that is not a constant, which image sampling takes only with VK_KHR_maintenance8 and shaderImageGatherExtended");
+-        }
++    const bool hasOffset = setup.layout.offset != NoImageComponent;
++    const bool foldOffset = hasOffset && FoldsTexelOffsets(state.program.Info().samplers.at(mem.sampler)) && ResourceMaterializer::UnnormalizedSampleMismatch(image) == nullptr;
++    const auto foldedMask = operandMask;
++    const auto foldedOperands = operands;
++    const bool gatherExtended = std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), static_cast<std::uint32_t>(spv::CapabilityImageGatherExtended)) != state.supportedCapabilities.end();
++    const bool offsetOperand = hasOffset && (constantOffset() != nullptr || (state.nonConstantImageOffsets && gatherExtended));
++    if (hasOffset && !offsetOperand && !foldOffset) {
++        ctx.Fail(access.inst, "has a texel offset that is not a constant, which image sampling takes only with VK_KHR_maintenance8 and shaderImageGatherExtended");
++    }
++    if (offsetOperand && constantOffset() == nullptr) {
+         state.module.EmitCapability(spv::CapabilityImageGatherExtended);
+         operandMask |= spv::ImageOperandsOffsetMask;
+         operands.insert(operands.end() - ((operandMask & spv::ImageOperandsMinLodMask) != 0u ? 1 : 0), PackedOffset(ctx, access, setup.layout));
+-    } else if (setup.layout.offset != NoImageComponent) {
++    } else if (offsetOperand) {
+         const auto bits = constantOffset()->ImmediateU32();
+         std::array<std::uint32_t, 3> values{};
+         for (std::uint32_t index = 0; index < setup.dimensionInfo.spatialComponents; index++) {
+@@ -1266,17 +1280,45 @@ void EmitSampleOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, con
+         operands.insert(operands.end() - ((operandMask & spv::ImageOperandsMinLodMask) != 0u ? 1 : 0), offset);
+ 
+     }
+-    const auto sampled = MakeSampledImage(state, mem.resource, mem.sampler, access.slot);
+-    const auto sample = state.module.AllocateId();
+-    std::vector<std::uint32_t> words = {opcode, resultType, sample, sampled, setup.coord};
+-    if (setup.dref) {
+-        words.push_back(drefValue);
+-    }
+-    if (operandMask != 0u) {
+-        words.push_back(operandMask);
+-        words.insert(words.end(), operands.begin(), operands.end());
++    const auto emitSample = [&](std::uint32_t coord, std::uint32_t mask, const std::vector<std::uint32_t>& arguments) {
++        const auto sampled = MakeSampledImage(state, mem.resource, mem.sampler, access.slot);
++        const auto sample = state.module.AllocateId();
++        std::vector<std::uint32_t> words = {opcode, resultType, sample, sampled, coord};
++        if (setup.dref) {
++            words.push_back(drefValue);
++        }
++        if (mask != 0u) {
++            words.push_back(mask);
++            words.insert(words.end(), arguments.begin(), arguments.end());
++        }
++        state.module.AddFunction(words);
++        return sample;
++    };
++    std::uint32_t sample = 0;
++    if (!foldOffset) {
++        sample = emitSample(setup.coord, operandMask, operands);
++    } else if (!offsetOperand) {
++        sample = emitSample(FoldedOffsetCoord(ctx, access, setup), foldedMask, foldedOperands);
++    } else {
++        const auto selector = state.module.SpecializationConstant(TypeU32(state), PipelineSpecialization::FoldOffsetBase + mem.sampler, 0u);
++        const auto folded = Binary(state, spv::OpINotEqual, TypeBool(state), selector, ConstantU32(state, 0u));
++        const auto foldLabel = state.module.AllocateId();
++        const auto operandLabel = state.module.AllocateId();
++        const auto merge = state.module.AllocateId();
++        state.module.AddFunction(spv::OpSelectionMerge, merge, spv::SelectionControlMaskNone);
++        state.module.AddFunction(spv::OpBranchConditional, folded, foldLabel, operandLabel);
++        EmitLabel(state, foldLabel);
++        const auto foldSample = emitSample(FoldedOffsetCoord(ctx, access, setup), foldedMask, foldedOperands);
++        const auto foldEnd = state.currentLabel;
++        state.module.AddFunction(spv::OpBranch, merge);
++        EmitLabel(state, operandLabel);
++        const auto operandSample = emitSample(setup.coord, operandMask, operands);
++        const auto operandEnd = state.currentLabel;
++        state.module.AddFunction(spv::OpBranch, merge);
++        EmitLabel(state, merge);
++        sample = state.module.AllocateId();
++        state.module.AddFunction(spv::OpPhi, resultType, sample, foldSample, foldEnd, operandSample, operandEnd);
+     }
+-    state.module.AddFunction(words);
+     const auto result = setup.dref ? sample : UnpackImageTexel(ctx, access, sample);
+     ctx.Define(access.inst, TableResult(ctx, access, ResultVector(ctx, access, result, setup.numericClass, setup.dref, false)));
+ }
+diff --git a/docs/dev/TechnicalDebt.md b/docs/dev/TechnicalDebt.md
+index befaeeeca7..dc188bc738 100644
+--- a/docs/dev/TechnicalDebt.md
++++ b/docs/dev/TechnicalDebt.md
+@@ -256,8 +256,9 @@ Throughout the project, every function at every stage either **does exactly what
+ - [Thread cancellation](../../core/libs/prx/libkernel/Pthread/src/Thread.cpp) (libkernel) is not modelled: `scePthreadCancel` throws, so no cancel request is ever pending and `scePthreadTestcancel` and `pthread_testcancel` return without acting; the cancel state and type set by `scePthreadSetcancelstate` and `scePthreadSetcanceltype` are stored and not used
+ - [MIMG `tfe` and `lwe`](../../core/shader/recompiler/RdnaDecoder/src/RdnaImageOpDecoder.cpp) never write the status VGPR after the data. On hardware it is written only when a texel fetch hits an unmapped page of a partially resident texture, or, for `lwe` on sample/gather, when the LOD is below the T# `MIN_LOD_WARN`; texture memory is always resident here, the LOD warning (texture-streaming feedback, like the T# `MIN_LOD_WARN` itself) is never reported, and `lwe` on `image_get_lod` throws.
+ - [Unnormalized S# coordinates](../../core/libs/prx/libSceAgcDriver/Graphics/src/GuestSamplerResource.cpp) (libSceAgcDriver) - `FORCE_UNNORMALIZED` uses a Vulkan `unnormalizedCoordinates` sampler, so the S# LOD range, LOD bias and mip filter are not applied, which is exact only on a one-level view.
+-- [Unnormalized S#s](../../core/shader/recompiler/Optimization/src/DescriptorBindingBuilder.cpp) are accepted only when direct and used only by explicit-LOD `image_sample` without offset, comparison, derivatives or `_a`, on a single-level, single-layer 1D or 2D view of mip 0, even when the image is also sampled through a normalized S#.
++- [Unnormalized S#s](../../core/shader/recompiler/Optimization/src/DescriptorBindingBuilder.cpp) are accepted only when direct and used only by explicit-LOD `image_sample` without comparison, derivatives or `_a`, on a single-level, single-layer 1D or 2D view of mip 0, even when the image is also sampled through a normalized S#.
+ - An [unnormalized S#](../../core/libs/prx/libSceAgcDriver/Graphics/src/GuestSamplerResource.cpp) (libSceAgcDriver) throws with unequal minification and magnification filters, anisotropy, `TRUNC_COORD`, `MC_COORD_TRUNC` or X/Y clamping other than last-texel or border.
++- [Unnormalized texel offsets](../../core/shader/recompiler/SpirvBackend/src/SpirvImageEmitter.cpp) are added to the f32 coordinates: exact on RDNA2 (gfx1035), which applies the offset before the clamp ([measured by adriadam10](https://github.com/boykopovar/AnyPS5/pull/822#issuecomment-6033192725)).
+ - [Image atomics](../../core/shader/recompiler/Optimization/src/ResourceMaterializer.cpp) on 32_SINT and 32_FLOAT surfaces act on the raw dword through an R32_UINT storage view; their float results are assumed to match those measured on 32_UINT surfaces. Other formats throw.
+ - [`s_memtime`](../../core/shader/recompiler/SpirvBackend/src/SpirvModuleEmitter.cpp) on RADV with a GFX10.3 to GFX11.7 GPU (RDNA 2, RDNA 3, RDNA 3.5) reads the Vulkan device clock instead of the subgroup clock, which [ACO](https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/amd/compiler/instruction_selection/aco_select_nir_intrinsics.cpp) reads from the 20-bit `SHADER_CYCLES` register there and which wraps every 2^20 cycles. The device clock is a monotonic 64-bit counter, but it counts the 100 MHz reference clock (the same one as `s_memrealtime`), not shader cycles, so `s_memtime` deltas are about 20 times smaller than on hardware. The families are matched by the name RADV reports ([`NarrowSubgroupClock`](../../core/libs/prx/libSceAgcDriver/Execution/src/SubgroupClock.cpp)); a family added to Mesa later reads the subgroup clock until it is listed
+ - [`ds_wrxchg2_rtn_b32`, `ds_wrxchg2st64_rtn_b32`, `ds_wrxchg2_rtn_b64` and `ds_wrxchg2st64_rtn_b64`](../../core/shader/recompiler/Translation/src/MemoryInstructions/SharedMemoryInstructions.cpp) are translated as two separate 32-bit or 64-bit atomic swaps per invocation. RDNA2 hardware (measured on gfx1035) performs every lane's first exchange before any lane's second one, so when lanes of the same wave or of different waves overlap addresses, the result can differ from hardware. `offset0 == offset1` throws, although on hardware it is two exchanges in order.

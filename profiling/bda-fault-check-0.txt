@@ -1,0 +1,2 @@
+[time] scheduler tick raised to 0.5 ms (was 0.50 ms, now 0.50 ms, timed waits fine)
+Empty BDA fault check: median 0.6058 us/check, max pass 0.6149 us/check

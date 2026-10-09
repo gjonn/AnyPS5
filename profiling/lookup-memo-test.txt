@@ -1,0 +1,26 @@
+[time] scheduler tick raised to 0.5 ms (was 0.50 ms, now 0.50 ms, timed waits fine)
+[src/VulkanDevice.cpp:583 VulkanDevice] VulkanDevice constructor window=0000000000000000
+[src/VulkanDevice.cpp:592 VulkanDevice] Vulkan loader loaded library=00007ffc36f20000
+[src/VulkanDevice.cpp:626 VulkanDevice] Vulkan instance created instance=0000019b1a133fd0
+[src/VulkanDevice.cpp:637 VulkanDevice] Physical device count=2
+[src/VulkanDevice.cpp:670 VulkanDevice] Physical device candidate=0000019b5c485cb0 name=NVIDIA GeForce RTX 5090 Laptop GPU api=0x40415f type=2
+[src/VulkanDevice.cpp:670 VulkanDevice] Physical device candidate=0000019b5c485ce0 name=Intel(R) Graphics api=0x404148 type=1
+[src/VulkanDevice.cpp:717 VulkanDevice] Physical device selected physical=0000019b5c485cb0 queueFamily=0
+[src/VulkanDevice.cpp:730 VulkanDevice] Selected GPU name=NVIDIA GeForce RTX 5090 Laptop GPU vendor=0x10de device=0x2c58 subgroup=32
+[src/VulkanDevice.cpp:732 VulkanDevice] Memory heap 0 size=24137.0 MiB flags=0x1
+[src/VulkanDevice.cpp:732 VulkanDevice] Memory heap 1 size=32478.7 MiB flags=0x0
+[src/VulkanDevice.cpp:733 VulkanDevice] Memory type 0 heap=1 flags=0x0
+[src/VulkanDevice.cpp:733 VulkanDevice] Memory type 1 heap=0 flags=0x1
+[src/VulkanDevice.cpp:733 VulkanDevice] Memory type 2 heap=1 flags=0x6
+[src/VulkanDevice.cpp:733 VulkanDevice] Memory type 3 heap=1 flags=0xe
+[src/VulkanDevice.cpp:733 VulkanDevice] Memory type 4 heap=0 flags=0x7
+[src/VulkanDevice.cpp:784 VulkanDevice] Shader clock driver=4 narrowSubgroupClock=0
+[src/VulkanDevice.cpp:950 VulkanDevice] Vulkan features tessellationAvailable=1 mesh=1 depthClip=1 depthRangeUnrestricted=1
+[src/VulkanDevice.cpp:1111 VulkanDevice] Compute wave32 programs run on subgroups of 32
+[src/VulkanDevice.cpp:1156 VulkanDevice] Vulkan device ready device=0000019b1c7900d0 queue=0000019b1c6b14d0 family=0
+[write-watch] host imports stay watched (APS5_WRITE_WATCH_IMPORTS=watch)
+[write-watch] host imports are compared on Windows because driver writes can arrive after the import window
+[pipeline-cache] loaded 566.8 KiB from C:\repos\AnyPS5-pr639\build\tests\shader_cache\vk-pipelines-10de-2c58-9a170000-9374c137417b3d73adcf90d3a502d334.bin
+[pipeline-cache] saved 673.5 KiB to C:\repos\AnyPS5-pr639\build\tests\shader_cache\vk-pipelines-10de-2c58-9a170000-9374c137417b3d73adcf90d3a502d334.bin in 1.4 ms (teardown)
+lookup memo: 2 hits, 8 misses
+lookup memo tests passed

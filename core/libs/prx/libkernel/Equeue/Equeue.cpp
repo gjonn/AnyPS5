@@ -1,3 +1,4 @@
+#include <ProfileOutput.hpp>
 #include <windows.h>
 #include <cstdlib>
 #include <cstdio>
@@ -340,9 +341,16 @@ int APS5_VABI sceKernelWaitEqueue(KernelEqueue eq, KernelEvent* ev, int num, int
         const auto waitedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waitStart).count();
         if (traceEvents && waitedMs >= 10.0) {
             const auto image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
-            std::fprintf(stderr, "[equeue] %.1f exe+0x%llx waited %.1f ms timeout %lld ->", std::fmod(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(), 1.0e7), static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(__builtin_return_address(0)) - image), waitedMs, timo ? static_cast<long long>(*timo) : -1LL);
-            for (int i = 0; i < *out && i < 4; ++i) std::fprintf(stderr, " filter %d ident 0x%llx data 0x%llx", static_cast<int>(ev[i].filter), static_cast<unsigned long long>(ev[i].ident), static_cast<unsigned long long>(ev[i].data));
-            std::fprintf(stderr, "\n");
+            char header[256];
+            std::snprintf(header, sizeof(header), "[equeue] %.1f exe+0x%llx waited %.1f ms timeout %lld ->", std::fmod(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(), 1.0e7), static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(__builtin_return_address(0)) - image), waitedMs, timo ? static_cast<long long>(*timo) : -1LL);
+            std::string line(header);
+            for (int i = 0; i < *out && i < 4; ++i) {
+                char event[128];
+                std::snprintf(event, sizeof(event), " filter %d ident 0x%llx data 0x%llx", static_cast<int>(ev[i].filter), static_cast<unsigned long long>(ev[i].ident), static_cast<unsigned long long>(ev[i].data));
+                line += event;
+            }
+            line += '\n';
+            Diagnostics::ProfileOutput_nid_no_patch().Write(std::move(line));
         }
     }
     if (*out == SCE_KERNEL_ERROR_EBADF) {

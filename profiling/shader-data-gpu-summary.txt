@@ -1,0 +1,155 @@
+{
+  "reports": 3,
+  "presents": 168,
+  "dropped_ranges": 0,
+  "batch_ms_per_present": 90.107,
+  "classes": [
+    {
+      "name": "draw",
+      "ms_per_present": 56.455,
+      "calls_per_present": 1013.661,
+      "MiB_per_present": 0.0
+    },
+    {
+      "name": "storage-writeback",
+      "ms_per_present": 10.56,
+      "calls_per_present": 133.423,
+      "MiB_per_present": 275.948
+    },
+    {
+      "name": "storage-upload",
+      "ms_per_present": 8.749,
+      "calls_per_present": 114.756,
+      "MiB_per_present": 303.074
+    },
+    {
+      "name": "staging-out",
+      "ms_per_present": 1.04,
+      "calls_per_present": 26.464,
+      "MiB_per_present": 14.195
+    },
+    {
+      "name": "shadow-publish",
+      "ms_per_present": 0.761,
+      "calls_per_present": 6.149,
+      "MiB_per_present": 10.246
+    },
+    {
+      "name": "present-blit",
+      "ms_per_present": 0.661,
+      "calls_per_present": 1.0,
+      "MiB_per_present": 5.062
+    },
+    {
+      "name": "staging-in",
+      "ms_per_present": 0.587,
+      "calls_per_present": 26.464,
+      "MiB_per_present": 14.195
+    },
+    {
+      "name": "dispatch-trail",
+      "ms_per_present": 0.396,
+      "calls_per_present": 144.673,
+      "MiB_per_present": 0.0
+    },
+    {
+      "name": "label-run",
+      "ms_per_present": 0.244,
+      "calls_per_present": 44.762,
+      "MiB_per_present": 0.002
+    },
+    {
+      "name": "dcc-keys",
+      "ms_per_present": 0.074,
+      "calls_per_present": 3.006,
+      "MiB_per_present": 0.722
+    },
+    {
+      "name": "dcc-clear",
+      "ms_per_present": 0.058,
+      "calls_per_present": 6.083,
+      "MiB_per_present": 160.282
+    },
+    {
+      "name": "dispatch-lead",
+      "ms_per_present": 0.051,
+      "calls_per_present": 65.911,
+      "MiB_per_present": 0.0
+    },
+    {
+      "name": "template-refresh",
+      "ms_per_present": 0.009,
+      "calls_per_present": 21.875,
+      "MiB_per_present": 0.004
+    },
+    {
+      "name": "indirect-args",
+      "ms_per_present": 0.004,
+      "calls_per_present": 2.0,
+      "MiB_per_present": 0.0
+    }
+  ],
+  "top_programs": [
+    {
+      "address": "0x1258c36900",
+      "ms_per_present": 3.69,
+      "calls_per_present": 18.982
+    },
+    {
+      "address": "0x7ff6949d8100",
+      "ms_per_present": 2.089,
+      "calls_per_present": 19.482
+    },
+    {
+      "address": "0x1258d73100",
+      "ms_per_present": 1.256,
+      "calls_per_present": 7.0
+    },
+    {
+      "address": "0x1258c66600",
+      "ms_per_present": 0.881,
+      "calls_per_present": 1.0
+    },
+    {
+      "address": "0x1258d12200",
+      "ms_per_present": 0.292,
+      "calls_per_present": 1.0
+    },
+    {
+      "address": "0x1258d25500",
+      "ms_per_present": 0.286,
+      "calls_per_present": 2.0
+    },
+    {
+      "address": "0x1258c65500",
+      "ms_per_present": 0.286,
+      "calls_per_present": 2.137
+    },
+    {
+      "address": "0x1258d67a00",
+      "ms_per_present": 0.196,
+      "calls_per_present": 2.0
+    },
+    {
+      "address": "0x120ae76600",
+      "ms_per_present": 0.185,
+      "calls_per_present": 1.0
+    },
+    {
+      "address": "0x1258d69600",
+      "ms_per_present": 0.137,
+      "calls_per_present": 5.0
+    },
+    {
+      "address": "0x1258c2b600",
+      "ms_per_present": 0.137,
+      "calls_per_present": 1.0
+    },
+    {
+      "address": "0x1258d61d00",
+      "ms_per_present": 0.131,
+      "calls_per_present": 1.0
+    }
+  ],
+  "limits": "Selected reports can include loading. Program and class ranges may overlap; their sums are not physical GPU utilization. Per-present values mix completion/report boundaries."
+}

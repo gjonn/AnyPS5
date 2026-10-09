@@ -114,7 +114,7 @@ BindingAllocationResult BindingAllocator::Allocate(IrProgram& program, const Bin
     std::array<std::vector<std::uint32_t>, ImageBindingCount> imageGroups;
     const auto place = [&](std::uint32_t i) {
         const bool dynamic = info.images[i].mipMode == ImageMipMode::DynamicStorage;
-        const std::uint32_t count = dynamic ? RuntimeAbi::StorageHeapCapacity : 1u;
+        const std::uint32_t count = dynamic ? RuntimeAbi::StorageMipCapacity : 1u;
         std::array<bool, ImageBindingCount> placed{};
         for (const auto& mode : ResourceMaterializer::RuntimeImageModes(info.images[i])) {
             const auto group = ImageBindingIndex(DescriptorBindingForImage(mode));
@@ -143,7 +143,7 @@ BindingAllocationResult BindingAllocator::Allocate(IrProgram& program, const Bin
     }
     for (std::uint32_t i = 0; i < imageGroups.size(); i++) {
         if (!imageGroups[i].empty()) {
-            if (imageGroups[i].size() > RuntimeAbi::HeapCapacity(static_cast<DescriptorBindingKind>(FirstImageBinding + i))) fail("shader image heap capacity exceeded");
+            if (imageGroups[i].size() > RuntimeAbi::HeapCapacity(static_cast<DescriptorBindingKind>(FirstImageBinding + i))) fail("shader image heap capacity exceeded: binding " + std::to_string(FirstImageBinding + i) + ", required " + std::to_string(imageGroups[i].size()) + ", capacity " + std::to_string(RuntimeAbi::HeapCapacity(static_cast<DescriptorBindingKind>(FirstImageBinding + i))));
             addBinding(next, static_cast<DescriptorBindingKind>(FirstImageBinding + i), std::move(imageGroups[i]));
         }
     }

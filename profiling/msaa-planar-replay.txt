@@ -1,0 +1,3 @@
+D:\ps5\gt7\diagnostics-rapid\zero-volume-draw\shader_1258db5000.req: 348 code words, 30 user data, 5 memory regions, wave64
+  graphics: 2 linked programs, draw 3 indices of 0 bytes at 0x0, 1 instances
+  recompiled: 29653 SPIR-V words

@@ -1,3 +1,4 @@
+#include "prx/libSceAgcDriver/Execution/include/ProfileOutput.hpp"
 #include "prx/libSceAgcDriver/Execution/include/PerformanceTimer.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Queues/Submission.hpp"
@@ -8,6 +9,9 @@
 #include "ThreadOwned.hpp"
 #include <bit>
 #include <cstdlib>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace AgcDriver::DriverDetail {
 
@@ -231,6 +235,14 @@ void Driver::executeRewindTail(const Submission& stalled) {
 }
 
 void Driver::Submit(const Packet* packet, std::uint32_t queue) {
+    static const bool trace = std::getenv("APS5_TRACE_GPU") != nullptr;
+    const auto traceEntry = trace ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+#ifdef _WIN32
+    const auto traceThread = trace ? GetCurrentThreadId() : 0ul;
+#else
+    const auto traceThread = 0ul;
+#endif
+    if (trace) AgcDriver::ProfilePrint_nid_no_patch("[submit-entry] %.1f tid %lu queue=0x%x\n", TraceMs(), traceThread, queue);
     const auto receivedAt = APS5_ENABLE_TIMING_LOG ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     CheckFailure();
     require(queue == 0 || (queue >= 0x20 && queue < 0x58), "unsupported compute queue");
@@ -255,8 +267,7 @@ void Driver::Submit(const Packet* packet, std::uint32_t queue) {
     if (APS5_ENABLE_TIMING_LOG) submission.validatedAt = std::chrono::steady_clock::now();
     waitForFlipRoom(submission);
     if (APS5_ENABLE_TIMING_LOG) submission.roomReadyAt = std::chrono::steady_clock::now();
-    static const bool trace = std::getenv("APS5_TRACE_GPU") != nullptr;
-    if (trace) std::fprintf(stderr, "[gpu] %.1f submit queue=0x%x dwords=%zu at %p\n", TraceMs(), queue, submission.commands.size(), static_cast<const void*>(descriptor.addr));
+    if (trace) AgcDriver::ProfilePrint_nid_no_patch("[gpu] %.1f submit queue=0x%x dwords=%zu at %p\n", TraceMs(), queue, submission.commands.size(), static_cast<const void*>(descriptor.addr));
     const auto validated = profile ? std::chrono::steady_clock::now() : start;
     {
         std::lock_guard lock(mutex);
@@ -280,6 +291,7 @@ void Driver::Submit(const Packet* packet, std::uint32_t queue) {
         ++accepted;
     }
     changed.notify_all();
+    if (trace) AgcDriver::ProfilePrint_nid_no_patch("[submit-return] %.1f tid %lu queue=0x%x elapsed %.3f ms\n", TraceMs(), traceThread, queue, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - traceEntry).count());
 }
 
 void Driver::SuspendPoint() {

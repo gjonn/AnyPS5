@@ -1,0 +1,60 @@
+D:\ps5\gt7\diagnostics-rapid\zero-volume-draw\shader_1258d04700.req: 488 code words, 30 user data, 5 memory regions, wave64
+  graphics: 2 linked programs, draw 4 indices of 0 bytes at 0x0, 1 instances
+  sampler 0 source=2 uses=0x0 compare=0 foldOffsets=0 pc=124
+    descriptor: 00008012 00fff000 01000000 00000000 (unnormalized=1)
+  sampler 1 source=4 uses=0x0 compare=0 foldOffsets=0 pc=272
+    descriptor: 00008012 00fff000 01000000 00000000 (unnormalized=1)
+  sampler 2 source=6 uses=0x0 compare=0 foldOffsets=0 pc=296
+    descriptor: 00008012 00fff000 02500000 00000000 (unnormalized=1)
+  sampler 3 source=7 uses=0x0 compare=0 foldOffsets=0 pc=504
+    descriptor: 00008012 00fff000 01000000 00000000 (unnormalized=1)
+  sampled pair: image=0 sampler=0 pc=124
+  sampled pair: image=1 sampler=1 pc=272
+  sampled pair: image=2 sampler=2 pc=296
+  sampled pair: image=2 sampler=3 pc=504
+  sampled pair: image=3 sampler=2 pc=576
+  image 0 source=1 dim=3 class=1 compare=0 packed=0 srgb=0 emuCompare=0 filter=0 pc=124
+    mode dim=3 numeric=1 conversion=0 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=2 conversion=0 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=3 conversion=0 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=2 conversion=34 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=1 conversion=0 packed=0 cube=0 depth=1 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=1 conversion=0 packed=0 cube=0 depth=1 unorm16=1 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=2 conversion=30 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=1
+    mode dim=3 numeric=2 conversion=43 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=1
+    descriptor: 1210c100 c1600000 021bc3bf 91800204 00000000 00700000 00280000 00121346
+    selected mode: 0
+  image 1 source=3 dim=3 class=1 compare=0 packed=0 srgb=0 emuCompare=0 filter=0 pc=272
+    mode dim=3 numeric=1 conversion=0 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=2 conversion=0 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=3 conversion=0 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=2 conversion=34 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=1 conversion=0 packed=0 cube=0 depth=1 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=1 conversion=0 packed=0 cube=0 depth=1 unorm16=1 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=2 conversion=30 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=1
+    mode dim=3 numeric=2 conversion=43 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=1
+    descriptor: 12215400 c1d00000 021bc3bf 91b0022c 00000000 00700000 006b0000 00122352
+    selected mode: 0
+  image 2 source=5 dim=3 class=1 compare=0 packed=0 srgb=0 emuCompare=0 filter=0 pc=296
+    mode dim=3 numeric=1 conversion=0 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=2 conversion=0 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=3 conversion=0 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=2 conversion=34 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=1 conversion=0 packed=0 cube=0 depth=1 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=1 conversion=0 packed=0 cube=0 depth=1 unorm16=1 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=2 conversion=30 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=1
+    mode dim=3 numeric=2 conversion=43 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=1
+    descriptor: 120ec000 c2400000 021bc3bf 91b003ac 00000000 00700000 007b0000 001210be
+    selected mode: 0
+  image 3 source=8 dim=3 class=1 compare=0 packed=0 srgb=0 emuCompare=0 filter=0 pc=576
+    mode dim=3 numeric=1 conversion=0 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=2 conversion=0 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=3 conversion=0 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=2 conversion=34 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=1 conversion=0 packed=0 cube=0 depth=1 unorm16=0 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=1 conversion=0 packed=0 cube=0 depth=1 unorm16=1 srgb=0 emuCompare=0 filter=0
+    mode dim=3 numeric=2 conversion=30 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=1
+    mode dim=3 numeric=2 conversion=43 packed=0 cube=0 depth=0 unorm16=0 srgb=0 emuCompare=0 filter=1
+    descriptor: 1229ea00 c4700000 021bc3bf 91b00977 00000000 00700000 00000000 00000000
+    selected mode: 0
+  recompiled: 22399 SPIR-V words

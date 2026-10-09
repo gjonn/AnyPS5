@@ -1,0 +1,3 @@
+D:\ps5\gt7\diagnostics-rapid\planar-confirm\shader_1258d12200.req: 900 code words, 2 user data, 14 memory regions, wave64
+  compute: threads 8x8x1, lds 0 dwords, group ids 110, tg size 0, thread id components 2
+  recompiled: 135173 SPIR-V words

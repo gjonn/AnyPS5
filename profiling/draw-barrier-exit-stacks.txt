@@ -1,0 +1,17 @@
+[New Thread 47640.0xbc64]
+
+Thread 2 (Thread 47640.0xbc64):
+#0  0x00007ffd3f0a3781 in ntdll!DbgBreakPoint () from C:\WINDOWS\SYSTEM32\ntdll.dll
+#1  0x00007ffd3f0b5cce in ntdll!DbgUiRemoteBreakin () from C:\WINDOWS\SYSTEM32\ntdll.dll
+#2  0x00007ffd3ce1cdf7 in KERNEL32!BaseThreadInitThunk () from C:\WINDOWS\System32\kernel32.dll
+#3  0x00007ffd3effee4c in ntdll!RtlUserThreadStart () from C:\WINDOWS\SYSTEM32\ntdll.dll
+#4  0x0000000000000000 in ?? ()
+
+Thread 1 (Thread 47640.0xc590):
+#0  0x00007ffd3f0e22b4 in ntdll!ZwWaitForMultipleObjects () from C:\WINDOWS\SYSTEM32\ntdll.dll
+#1  0x00007ffd3c2a2773 in WaitForMultipleObjectsEx () from C:\WINDOWS\System32\KernelBase.dll
+#2  0x00007ffd3c2a2641 in WaitForMultipleObjects () from C:\WINDOWS\System32\KernelBase.dll
+#3  0x00007ffcd87241af in ?? () from C:\tools\mingw64\bin\libwinpthread-1.dll
+#4  0x00007ffcd8723a6f in ?? () from C:\tools\mingw64\bin\libwinpthread-1.dll
+#5  0x00007ffcd8723935 in ?? () from C:\tools\mingw64\bin\libwinpthread-1.dll
+[Inferior 1 (process 47640) detached]

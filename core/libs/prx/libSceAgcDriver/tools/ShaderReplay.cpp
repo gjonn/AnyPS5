@@ -13,6 +13,7 @@
 #endif
 
 #include <cstdio>
+#include <cstring>
 #include <exception>
 #include <fstream>
 #include <sstream>
@@ -44,9 +45,23 @@ bool g_spirv = false;
 bool g_graph = false;
 bool g_maintenance8 = false;
 bool g_code = false;
+bool g_images = false;
+
+bool ReadCaptured(void* context, std::uint64_t address, std::uint32_t* value) {
+    const auto& request = *static_cast<const ShaderRecompiler::RecompileRequest*>(context);
+    for (const auto& region : request.context.memory) {
+        if (address >= region.guestAddress && region.bytes.size() >= sizeof(*value) && address - region.guestAddress <= region.bytes.size() - sizeof(*value)) {
+            std::memcpy(value, region.bytes.data() + (address - region.guestAddress), sizeof(*value));
+            return true;
+        }
+    }
+    return false;
+}
 
 bool Replay(const char* path) {
     auto request = ShaderRecompiler::RequestSerializer{}.Deserialize(ReadText(path));
+    // A replay measures the current implementation, not a prior cached artifact.
+    request.request.useCache = false;
     std::printf("%s: %zu code words, %zu user data, %zu memory regions, wave%u\n", path, request.request.shader.code.size(), request.request.context.userData.size(), request.request.context.memory.size(), request.request.context.waveSize);
     if (request.request.context.compute.has_value()) {
         const auto& compute = *request.request.context.compute;
@@ -108,7 +123,39 @@ bool Replay(const char* path) {
     try {
         auto program = ShaderRecompiler::PrepareResourceProgram(request.request);
         constexpr ShaderRecompiler::ResourceMaterializer materializer;
-        static_cast<void>(materializer.ExtractPlan(program));
+        const auto plan = materializer.ExtractPlan(program);
+        if (g_images) {
+            ShaderRecompiler::SrtRuntime runtime{request.request.context.userData, request.request.shader.codeAddress, ReadCaptured, &request.request, ReadCaptured};
+            for (std::size_t i = 0; i < plan.info.samplers.size(); ++i) {
+                const auto& sampler = plan.info.samplers[i];
+                std::printf("  sampler %zu source=%u uses=0x%x compare=%u foldOffsets=%u pc=%u\n", i, sampler.source, unsigned(sampler.uses), sampler.depthCompare, sampler.foldTexelOffsets, sampler.firstUsePc);
+                try {
+                    ShaderRecompiler::DescriptorValue descriptor;
+                    ShaderRecompiler::SrtWalker{}.EvaluateDescriptorSource(plan, sampler.source, runtime, descriptor);
+                    std::printf("    descriptor:");
+                    for (unsigned j = 0; j < descriptor.dwordCount; ++j) std::printf(" %08x", descriptor.dwords[j]);
+                    std::printf(" (unnormalized=%u)\n", (descriptor.dwords[0] >> 15u) & 1u);
+                } catch (const std::exception& error) {
+                    std::printf("    descriptor failed: %s\n", FirstLine(error.what()).c_str());
+                }
+            }
+            for (const auto& pair : plan.info.sampledPairs) std::printf("  sampled pair: image=%u sampler=%u pc=%u\n", pair.image, pair.sampler, pair.firstUsePc);
+            for (std::size_t i = 0; i < plan.info.images.size(); ++i) {
+                const auto& base = plan.info.images[i];
+                std::printf("  image %zu source=%u dim=%u class=%u compare=%u packed=%u srgb=%u emuCompare=%u filter=%u pc=%u\n", i, base.source, unsigned(base.dimension), unsigned(base.resourceClass), base.depthCompare, base.packed, base.srgbDecode, base.emulatedCompare, base.emulatedFilter, base.firstUsePc);
+                for (const auto& mode : plan.info.runtimeImageModes[i]) std::printf("    mode dim=%u numeric=%u conversion=%u packed=%u cube=%u depth=%u unorm16=%u srgb=%u emuCompare=%u filter=%u\n", unsigned(mode.dimension), unsigned(mode.numericClass), unsigned(mode.conversionFormat), unsigned(mode.packedFormat), mode.cube, mode.depthBits, mode.depthUnorm16, mode.srgbDecode, mode.emulatedCompare, mode.emulatedFilter);
+                try {
+                    ShaderRecompiler::DescriptorValue descriptor;
+                    ShaderRecompiler::SrtWalker{}.EvaluateDescriptorSource(plan, base.source, runtime, descriptor);
+                    std::printf("    descriptor:");
+                    for (unsigned j = 0; j < descriptor.dwordCount; ++j) std::printf(" %08x", descriptor.dwords[j]);
+                    std::printf("\n");
+                    std::printf("    selected mode: %u\n", materializer.RuntimeImageMode(base, descriptor, plan.info.runtimeImageModes[i]));
+                } catch (const std::exception& error) {
+                    std::printf("    selection failed: %s\n", FirstLine(error.what()).c_str());
+                }
+            }
+        }
     } catch (const std::exception& error) {
         std::printf("  resource analysis failed: %s\n", FirstLine(error.what()).c_str());
         return false;
@@ -152,11 +199,15 @@ bool Replay(const char* path) {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: agc_shader_replay [--dis] [--asm] [--cfg] [--mem] [--spv] [--code] [--maintenance8] <shader.req>...\n  the driver writes shader_<address>.req files when APS5_DUMP_SHADERS is set\n");
+        std::fprintf(stderr, "usage: agc_shader_replay [--dis] [--asm] [--cfg] [--mem] [--images] [--spv] [--code] [--maintenance8] <shader.req>...\n  the driver writes shader_<address>.req files with APS5_DUMP_SHADERS or APS5_DUMP_SHADER_FAILURES\n");
         return 2;
     }
     int failures = 0;
     for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--images") {
+            g_images = true;
+            continue;
+        }
         if (std::string(argv[i]) == "--dis") {
             g_disassemble = true;
             continue;

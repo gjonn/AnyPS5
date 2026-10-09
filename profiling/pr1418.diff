@@ -1,0 +1,219 @@
+diff --git a/core/libs/prx/libSceAgcDriver/tests/ShaderDiskCache.cpp b/core/libs/prx/libSceAgcDriver/tests/ShaderDiskCache.cpp
+index 11af875da1..e37a23bdab 100644
+--- a/core/libs/prx/libSceAgcDriver/tests/ShaderDiskCache.cpp
++++ b/core/libs/prx/libSceAgcDriver/tests/ShaderDiskCache.cpp
+@@ -172,7 +172,7 @@ CompiledVariant sampleVariant() {
+     image.indirectSearchIterations = 3;
+     image.indirectResources = {1, 2, 3};
+     info.info.images = {image};
+-    info.info.samplers = {{7, 0x10, true, false, SamplerUseExplicitLod | SamplerUseGather}};
++    info.info.samplers = {{7, 0x10, true, false, true, SamplerUseExplicitLod | SamplerUseGather}};
+     info.info.sampledPairs = {{0, 0, 0x10}};
+     StageInput input{};
+     input.kind = StageInputKind::GlobalInvocationId;
+diff --git a/core/libs/prx/libSceAgcDriver/tests/execution/ImageSampleUnnormalized.cpp b/core/libs/prx/libSceAgcDriver/tests/execution/ImageSampleUnnormalized.cpp
+index dc7da4f9af..80806bca79 100644
+--- a/core/libs/prx/libSceAgcDriver/tests/execution/ImageSampleUnnormalized.cpp
++++ b/core/libs/prx/libSceAgcDriver/tests/execution/ImageSampleUnnormalized.cpp
+@@ -42,6 +42,12 @@ alignas(256) constexpr std::array<std::uint32_t, 40> Code{
+     0x80001001, 0xe0701034, 0x80001101, 0xe0701038, 0x80001201, 0xe070103c, 0x80001301, 0xbf810000,
+ };
+ 
++alignas(256) constexpr std::array<std::uint32_t, 22> GradientCode{
++    0x34020086, 0xe0301000, 0x80000601, 0xe0301004, 0x80000701, 0xbf8c3f70, 0x7e0402f6, 0x7e060280,
++    0x7e080280, 0x7e0a02f6, 0xf0880f08, 0x00610802, 0xbf8c3f70, 0xe0701010, 0x80000801, 0xe0701014,
++    0x80000901, 0xe0701018, 0x80000a01, 0xe070101c, 0x80000b01, 0xbf810000,
++};
++
+ constexpr std::array<const char*, 3> Instructions{"image_sample_lz", "image_sample_l 2.7", "image_sample"};
+ 
+ struct SamplerCase {
+@@ -128,7 +134,7 @@ std::array<std::uint32_t, 8> TextureDescriptor(const void* data, std::uint32_t l
+ 
+ using Samples = std::vector<std::array<std::uint32_t, Results>>;
+ 
+-Samples Run(AgcDriver::VulkanDevice& device, const std::array<std::uint32_t, 8>& texture, const std::array<std::uint32_t, 4>& sampler, const std::vector<Coordinate>& coordinates) {
++Samples Run(AgcDriver::VulkanDevice& device, const std::array<std::uint32_t, 8>& texture, const std::array<std::uint32_t, 4>& sampler, const std::vector<Coordinate>& coordinates, std::span<const std::uint32_t> code = Code) {
+     Samples samples;
+     for (std::size_t first = 0; first < coordinates.size(); first += Threads) {
+         Buffer.fill(0xdeadbeefu);
+@@ -142,7 +148,6 @@ Samples Run(AgcDriver::VulkanDevice& device, const std::array<std::uint32_t, 8>&
+         std::copy(buffer.begin(), buffer.end(), userData.begin());
+         std::copy(texture.begin(), texture.end(), userData.begin() + 4);
+         std::copy(sampler.begin(), sampler.end(), userData.begin() + 12);
+-        const std::span<const std::uint32_t> code(Code);
+         const std::array<ShaderRecompiler::MemoryRegion, 1> memory{{{reinterpret_cast<std::uintptr_t>(code.data()), std::as_bytes(code)}}};
+         const ShaderRecompiler::ShaderComputeStageInfo compute{{Threads, 1, 1}, 0u, {false, false, false}, false, 1};
+         ShaderRecompiler::RecompileRequest request{
+@@ -227,6 +232,12 @@ int main() {
+             const auto multiSamples = Run(*device, multi, sampler.words, coordinates);
+             Check(sampler, "first level of a 4-level image", coordinates, multiSamples);
+             Require(multiSamples == singleSamples, std::string(sampler.name) + ": the first level of a 4-level image does not sample like a 1-level image");
++            const auto gradientSamples = Run(*device, multi, sampler.words, coordinates, GradientCode);
++            for (std::size_t index = 0; index < gradientSamples.size(); ++index) {
++                for (std::uint32_t component = 0; component < 4u; ++component) {
++                    Require(gradientSamples[index][component] == singleSamples[index][component], std::string(sampler.name) + ": image_sample_d with large derivatives did not sample the base level (sample " + std::to_string(index) + ")");
++                }
++            }
+         }
+         ExpectFailure(*device, TextureDescriptor(MultiLevel.data(), 2u, 2u), Samplers[0].words, "single-level", "a 3-level view");
+         ExpectFailure(*device, single, {0x00008092u, 0x00fff000u, 0x05100000u, 0u}, "different minification", "unequal minification and magnification filters");
+diff --git a/core/shader/recompiler/IntermediateRepresentation/include/IntermediateRepresentation/IrMetadata/Resources.hpp b/core/shader/recompiler/IntermediateRepresentation/include/IntermediateRepresentation/IrMetadata/Resources.hpp
+index a25930f11f..d6b185c136 100644
+--- a/core/shader/recompiler/IntermediateRepresentation/include/IntermediateRepresentation/IrMetadata/Resources.hpp
++++ b/core/shader/recompiler/IntermediateRepresentation/include/IntermediateRepresentation/IrMetadata/Resources.hpp
+@@ -107,6 +107,7 @@ struct SamplerResource {
+     std::uint32_t firstUsePc = 0;
+     bool forcePointFiltering = false;
+     bool depthCompare = false;
++    bool unnormalized = false;
+     std::uint8_t uses = 0;
+ 
+     bool operator==(const SamplerResource& other) const = default;
+diff --git a/core/shader/recompiler/Optimization/include/Optimization/ResourceMaterializer.hpp b/core/shader/recompiler/Optimization/include/Optimization/ResourceMaterializer.hpp
+index aed4b1d833..a086afb073 100644
+--- a/core/shader/recompiler/Optimization/include/Optimization/ResourceMaterializer.hpp
++++ b/core/shader/recompiler/Optimization/include/Optimization/ResourceMaterializer.hpp
+@@ -40,6 +40,7 @@ struct ResourceSpecialization {
+ 
+     std::vector<Buffer> buffers;
+     std::vector<Image> images;
++    std::vector<std::uint32_t> unnormalizedSamplers;
+ 
+     bool operator==(const ResourceSpecialization& other) const;
+ 
+diff --git a/core/shader/recompiler/Optimization/src/DescriptorBindingBuilder.cpp b/core/shader/recompiler/Optimization/src/DescriptorBindingBuilder.cpp
+index 6cd17b6b38..3da06d107f 100644
+--- a/core/shader/recompiler/Optimization/src/DescriptorBindingBuilder.cpp
++++ b/core/shader/recompiler/Optimization/src/DescriptorBindingBuilder.cpp
+@@ -206,7 +206,7 @@ UnnormalizedProof ProveUnnormalized(const ShaderInfo& info, const ResourceSnapsh
+             continue;
+         }
+         const auto& sampler = info.samplers[r];
+-        const std::uint32_t unsupported = sampler.uses & ~static_cast<std::uint32_t>(SamplerUseExplicitLod);
++        const std::uint32_t unsupported = sampler.uses & ~static_cast<std::uint32_t>(SamplerUseExplicitLod | SamplerUseImplicitLod | SamplerUseGradient);
+         if (unsupported != 0u) {
+             failUnnormalized(UnnormalizedUseReason(unsupported));
+         }
+diff --git a/core/shader/recompiler/Optimization/src/ResourceMaterializer.cpp b/core/shader/recompiler/Optimization/src/ResourceMaterializer.cpp
+index 08c9b15958..fb221f9899 100644
+--- a/core/shader/recompiler/Optimization/src/ResourceMaterializer.cpp
++++ b/core/shader/recompiler/Optimization/src/ResourceMaterializer.cpp
+@@ -651,6 +651,11 @@ void buildResourceSpecialization(const IrResourcePlan& plan, ResourceSnapshot& s
+         }
+     }
+ 
++    result.unnormalizedSamplers.assign(snapshot.samplers.size(), 0u);
++    for (std::uint32_t index = 0; index < snapshot.samplers.size(); index++) {
++        const auto& sampler = snapshot.samplers[index];
++        if (sampler.dwordCount == 4u && ((sampler.dwords[0] >> 15u) & 1u) != 0u) result.unnormalizedSamplers[index] = 1u;
++    }
+     result.boundDescriptors.clear();
+     result.boundDescriptors.reserve(result.buffers.size() + result.images.size());
+     for (std::uint32_t index = 0; index < result.buffers.size(); index++) {
+@@ -746,6 +751,9 @@ void ResourceMaterializer::Apply(IrProgram& program, const ResourceSpecializatio
+         }
+     }
+     auto samplers = resources.info.samplers;
++    for (std::uint32_t index = 0; index < samplers.size() && index < specialization.unnormalizedSamplers.size(); index++) {
++        samplers[index].unnormalized = specialization.unnormalizedSamplers[index] != 0u;
++    }
+     auto sampledPairs = resources.info.sampledPairs;
+     samplers.reserve(samplerCount);
+     for (std::uint32_t index = 0; index < resources.info.samplers.size(); index++) {
+@@ -1043,7 +1051,7 @@ bool ResourceSpecialization::Image::operator==(const Image& other) const {
+ }
+ 
+ bool ResourceSpecialization::operator==(const ResourceSpecialization& other) const {
+-    return buffers == other.buffers && images == other.images;
++    return buffers == other.buffers && images == other.images && unnormalizedSamplers == other.unnormalizedSamplers;
+ }
+ 
+ }
+diff --git a/core/shader/recompiler/ShaderDiskCache.cpp b/core/shader/recompiler/ShaderDiskCache.cpp
+index ed87d113e6..4de2649efe 100644
+--- a/core/shader/recompiler/ShaderDiskCache.cpp
++++ b/core/shader/recompiler/ShaderDiskCache.cpp
+@@ -78,7 +78,7 @@ static_assert(sizeof(StageOutput) == 48, "StageOutput changed: update the info e
+ static_assert(sizeof(IrBindingLayout) == 64, "IrBindingLayout changed: update the layout encoder");
+ static_assert(sizeof(IrDescriptorBinding) == 32, "IrDescriptorBinding changed: update the layout encoder");
+ static_assert(sizeof(BindingAllocationResult) == 120, "BindingAllocationResult changed: update the allocation encoder");
+-static_assert(sizeof(ResourceSpecialization) == 72, "ResourceSpecialization changed: update BuildKey");
++static_assert(sizeof(ResourceSpecialization) == 96, "ResourceSpecialization changed: update BuildKey");
+ static_assert(sizeof(ResourceSpecialization::Buffer) == 16, "ResourceSpecialization::Buffer changed: update BuildKey");
+ static_assert(sizeof(ResourceSpecialization::Image) == 48, "ResourceSpecialization::Image changed: update BuildKey");
+ static_assert(sizeof(BindingLayout) == 16, "BindingLayout changed: update BuildKey");
+@@ -429,6 +429,7 @@ void encodeInfo(Writer& writer, const CompiledShaderInfo& compiled) {
+         out.Value(sampler.firstUsePc);
+         out.Value(sampler.forcePointFiltering);
+         out.Value(sampler.depthCompare);
++        out.Value(sampler.unnormalized);
+         out.Value(sampler.uses);
+     });
+     writer.List(info.sampledPairs, [](Writer& out, const SampledResourcePair& pair) {
+@@ -522,6 +523,7 @@ void decodeInfo(Reader& reader, CompiledShaderInfo& compiled) {
+         in.Value(sampler.firstUsePc);
+         in.Value(sampler.forcePointFiltering);
+         in.Value(sampler.depthCompare);
++        in.Value(sampler.unnormalized);
+         in.Value(sampler.uses);
+     });
+     reader.List(info.sampledPairs, 12, [](Reader& in, SampledResourcePair& pair) {
+@@ -831,6 +833,7 @@ void BuildKey(const RecompileRequest& request, std::uint32_t hostSubgroupSize, c
+         out.Value(image.emulatedCompare);
+         out.Value(image.srgbDecode);
+     });
++    writer.Values(std::span<const std::uint32_t>(specialization.unnormalizedSamplers));
+     writer.Values(std::span<const std::uint32_t>(specialization.boundDescriptors));
+     const auto& switches = switchKey();
+     key.insert(key.end(), switches.begin(), switches.end());
+diff --git a/core/shader/recompiler/ShaderDiskCache.hpp b/core/shader/recompiler/ShaderDiskCache.hpp
+index 01a2e20bbf..29e244b46d 100644
+--- a/core/shader/recompiler/ShaderDiskCache.hpp
++++ b/core/shader/recompiler/ShaderDiskCache.hpp
+@@ -12,7 +12,7 @@
+ 
+ namespace ShaderRecompiler::ShaderDiskCache {
+ 
+-inline constexpr std::uint32_t FormatVersion = 7;
++inline constexpr std::uint32_t FormatVersion = 8;
+ 
+ enum class LoadStatus {
+     Loaded,
+diff --git a/core/shader/recompiler/SpirvBackend/src/SpirvImageEmitter.cpp b/core/shader/recompiler/SpirvBackend/src/SpirvImageEmitter.cpp
+index 9c8599186e..800d406f1c 100644
+--- a/core/shader/recompiler/SpirvBackend/src/SpirvImageEmitter.cpp
++++ b/core/shader/recompiler/SpirvBackend/src/SpirvImageEmitter.cpp
+@@ -1183,7 +1183,9 @@ void EmitSampleOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, con
+         EmitEmulatedCompareSample(ctx, access, setup);
+         return;
+     }
+-    const bool explicitLod = ImageSampleExplicitLod(mem.imageSampleFlags, state.program.Resources().stage);
++    const auto& samplerResources = state.program.Resources().info.samplers;
++    const bool unnormalized = !setup.dref && mem.sampler < samplerResources.size() && samplerResources[mem.sampler].unnormalized;
++    const bool explicitLod = unnormalized || ImageSampleExplicitLod(mem.imageSampleFlags, state.program.Resources().stage);
+     std::uint32_t opcode = spv::OpImageSampleImplicitLod;
+     if (explicitLod) {
+         opcode = setup.dref ? spv::OpImageSampleDrefExplicitLod : spv::OpImageSampleExplicitLod;
+@@ -1198,18 +1200,18 @@ void EmitSampleOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, con
+     }
+     std::uint32_t operandMask = 0;
+     std::vector<std::uint32_t> operands;
+-    if (HasFlag(mem, RdnaImageSampleFlagDerivative)) {
++    if (!unnormalized && HasFlag(mem, RdnaImageSampleFlagDerivative)) {
+         operandMask |= spv::ImageOperandsGradMask;
+         operands.push_back(CoordF32(ctx, access, setup.layout.gradX, setup.dimensionInfo.spatialComponents, AddressDimension(access).spatialComponents));
+         operands.push_back(CoordF32(ctx, access, setup.layout.gradY, setup.dimensionInfo.spatialComponents, AddressDimension(access).spatialComponents));
+     } else if (explicitLod) {
+         operandMask |= spv::ImageOperandsLodMask;
+-        operands.push_back(HasFlag(mem, RdnaImageSampleFlagLod) ? AddressF32(ctx, access, setup.layout.lod) : ZeroF32(state));
++        operands.push_back(!unnormalized && HasFlag(mem, RdnaImageSampleFlagLod) ? AddressF32(ctx, access, setup.layout.lod) : ZeroF32(state));
+     } else if (setup.layout.bias != NoImageComponent) {
+         operandMask |= spv::ImageOperandsBiasMask;
+         operands.push_back(AddressF32(ctx, access, setup.layout.bias));
+     }
+-    if (setup.layout.clamp != NoImageComponent) {
++    if (!unnormalized && setup.layout.clamp != NoImageComponent) {
+         const auto& capabilities = state.supportedCapabilities;
+         if (std::find(capabilities.begin(), capabilities.end(), static_cast<std::uint32_t>(spv::CapabilityMinLod)) == capabilities.end()) ctx.Fail(access.inst, "clamps its LOD, which needs the device's shaderResourceMinLod");
+         const auto clamp = AddressF32(ctx, access, setup.layout.clamp);

@@ -2045,8 +2045,9 @@ void GuestBufferMemory::UploadPrepare(bool addressable) {
         const bool stale = importsStale(context, state);
         for (auto& region : regions) {
             if (region.mirror != nullptr) continue;
-            // An import found when the lease was acquired is reused while none was dropped since.
-            const HostImport* entry = region.direct != nullptr && state.epoch == importsEpoch ? region.direct : nullptr;
+            // The merged region may be larger than the import retained from its
+            // first constituent. Epoch validity alone does not prove coverage.
+            const HostImport* entry = region.direct != nullptr && state.epoch == importsEpoch && region.begin >= region.direct->base && region.end - region.direct->base <= region.direct->bytes ? region.direct : nullptr;
             region.direct = nullptr;
             if (stale) {
                 region.pending = true;
@@ -2188,9 +2189,9 @@ void GuestBufferMemory::UploadFinish(bool addressable) {
                 if (importsStale(context, state)) refreshImports(context, state, importRanges());
                 importsRefreshed = true;
             }
-            // An import taken by UploadPrepare (or at the lease) is still the registry's unless one
-            // was dropped since.
-            const HostImport* entry = region.direct != nullptr && state.epoch == importsEpoch ? region.direct : nullptr;
+            // Reuse an import only while it is still registered and covers the
+            // complete region, which may have grown by merging descriptors.
+            const HostImport* entry = region.direct != nullptr && state.epoch == importsEpoch && region.begin >= region.direct->base && region.end - region.direct->base <= region.direct->bytes ? region.direct : nullptr;
             region.direct = nullptr;
             if (entry == nullptr) entry = findImport(state, region.begin, region.end);
             if (entry == nullptr) {
@@ -2513,6 +2514,16 @@ VkDescriptorBufferInfo GuestBufferMemory::Descriptor(std::uint64_t address, std:
     const auto* found = owner(address);
     Require(found != nullptr, "guest buffer has no GPU owner");
     const auto& region = *found;
+    const auto traceViewFailure = [&](const char* check) {
+        static const bool enabled = std::getenv("APS5_TRACE_BUFFER_VIEW") != nullptr;
+        static std::atomic<unsigned> reports{0};
+        if (!enabled || reports.fetch_add(1, std::memory_order_relaxed) >= 16u) return;
+        std::fprintf(stderr, "[buffer-view] %s request=0x%llx+0x%llx owner=0x%llx..0x%llx direct=%d mirror=%d staged=%d regions=%zu\n", check,
+            static_cast<unsigned long long>(address), static_cast<unsigned long long>(bytes),
+            static_cast<unsigned long long>(region.begin), static_cast<unsigned long long>(region.end),
+            region.direct != nullptr, region.mirror != nullptr, region.buffer != nullptr, regions.size());
+    };
+    if (!(address >= region.begin && address + bytes <= region.end && (region.buffer != nullptr || region.direct != nullptr || region.mirror != nullptr))) traceViewFailure("coverage");
     Require(address >= region.begin && address + bytes <= region.end && (region.buffer != nullptr || region.direct != nullptr || region.mirror != nullptr), "guest buffer view exceeds its GPU owner");
     const auto base = region.direct != nullptr ? region.direct->base : region.mirror != nullptr ? region.mirror->base : region.begin;
     const auto offset = address - base;
@@ -2521,6 +2532,7 @@ VkDescriptorBufferInfo GuestBufferMemory::Descriptor(std::uint64_t address, std:
     adjustment = static_cast<std::uint32_t>(offset % std::max<VkDeviceSize>(context.limits.minStorageBufferOffsetAlignment, 4));
     const auto range = ViewBytes(bytes, adjustment);
     const auto end = region.direct != nullptr ? region.direct->base + region.direct->bytes : region.end;
+    if (address - adjustment + range > end) traceViewFailure("aligned-range");
     Require(address - adjustment + range <= end, "guest buffer view exceeds its GPU owner");
     Require(range <= context.limits.maxStorageBufferRange, "guest buffer view exceeds descriptor range limit");
     const auto handle = region.direct != nullptr ? region.direct->buffer : region.mirror != nullptr ? region.mirror->buffer->Handle() : region.buffer->Handle();

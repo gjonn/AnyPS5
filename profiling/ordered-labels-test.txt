@@ -1,0 +1,15 @@
+[time] scheduler tick raised to 0.5 ms (was 0.50 ms, now 0.50 ms, timed waits fine)
+[gpu] queue 0x20 WAIT_REG_MEM at 0x7ff7337bc740 timed out after 1000ms (function 3 ref 0x1 mask 0xffffffff value 0x0)
+[gpu]   earlier write by queue 0x0 opcode 0x37 at 0x7ff7337bc740+0x4
+[gpu]   preceding packet WAIT_REG_MEM 00000013 337bc740 00007ff7 00000001 ffffffff 00000019
+[gpu] queue 0x20 WAIT_REG_MEM at 0x7ff7337b4040 timed out after 1000ms (function 3 ref 0x1 mask 0xffffffff value 0x0)
+[gpu]   earlier write by queue 0x20 opcode 0x37 at 0x7ff7337b4040+0x4
+[gpu]   preceding packet WAIT_REG_MEM 00000013 337bc5c0 00007ff7 00000001 ffffffff 00000019
+[gpu]   preceding packet WRITE_DATA 00100200 337b4040 00007ff7 00000000
+[gpu]   preceding packet WAIT_REG_MEM 00000013 337b4040 00007ff7 00000001 ffffffff 00000019
+[gpu] queue 0x20 WAIT_REG_MEM_64 at 0x7ff7337b4080 timed out after 1000ms (function 3 ref 0x1 mask 0xffffffffffffffff value 0x5eed00000000)
+[gpu]   earlier write by queue 0x0 opcode 0x37 at 0x7ff7337b4080+0x4
+[gpu]   earlier write by queue 0x0 opcode 0x37 at 0x7ff7337b4080+0x4
+[gpu]   preceding packet WAIT_REG_MEM 00000013 337bc680 00007ff7 00000001 ffffffff 00000019
+[gpu]   preceding packet WAIT_REG_MEM_64 00000013 337b4080 00007ff7 00000001 00000000 ffffffff ffffffff 00000019
+AGC driver label and submission-order tests passed

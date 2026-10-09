@@ -57,6 +57,16 @@ alignas(256) constexpr std::array<std::uint32_t, 16> OffsetCode{
     0x7e0c0308, 0xf0f80108, 0x00820901, 0xbf8c3f70, 0x34160082, 0xe0701000, 0x8001090b, 0xbf810000,
 };
 
+alignas(256) constexpr auto ArrayCode = [] {
+    std::array<std::uint32_t, 15> code{};
+    std::copy_n(Code.begin(), 4, code.begin());
+    code[4] = 0x7e0802ffu; // v_mov_b32 v4, 9.0: deliberately nonzero array layer
+    code[5] = 0x41100000u;
+    std::copy(Code.begin() + 4, Code.end(), code.begin() + 6);
+    code[6] = 0xf0bc0128u; // image_sample_c_lz with a 2D-array address
+    return code;
+}();
+
 struct Sampler {
     std::uint32_t clamp;
     std::uint32_t filter;
@@ -166,7 +176,7 @@ float Expected(std::uint32_t tid, const Sampler& sampler, bool offsets) {
     return top * (1.0f - b) + bottom * b;
 }
 
-ShaderRecompiler::RecompileResult Compile(AgcDriver::VulkanDevice& device, std::uint32_t format, const Sampler& sampler, std::span<const std::uint32_t> code = Code, bool useCache = false, bool nativeSampleOffsets = true) {
+ShaderRecompiler::RecompileResult Compile(AgcDriver::VulkanDevice& device, std::uint32_t format, const Sampler& sampler, std::span<const std::uint32_t> code = Code, bool useCache = false, bool nativeSampleOffsets = true, std::uint32_t swizzle = 0xfacu) {
     std::vector<std::uint32_t> userData(24, 0u);
     const auto input = BufferDescriptor(Input.data(), static_cast<std::uint32_t>(sizeof(Input)));
     const auto output = BufferDescriptor(Output.data(), static_cast<std::uint32_t>(sizeof(Output)));
@@ -191,11 +201,11 @@ ShaderRecompiler::RecompileResult Compile(AgcDriver::VulkanDevice& device, std::
     return ShaderRecompiler::Recompile(request);
 }
 
-void Run(AgcDriver::VulkanDevice& device, const Sampler& sampler, const char* name, bool offsets = false, bool useCache = false) {
+void Run(AgcDriver::VulkanDevice& device, const Sampler& sampler, const char* name, bool offsets = false, bool useCache = false, bool arrayAddress = false) {
     Output.fill(-1.0f);
-    const std::span<const std::uint32_t> code = offsets ? std::span<const std::uint32_t>(OffsetCode) : std::span<const std::uint32_t>(Code);
+    const std::span<const std::uint32_t> code = arrayAddress ? std::span<const std::uint32_t>(ArrayCode) : offsets ? std::span<const std::uint32_t>(OffsetCode) : std::span<const std::uint32_t>(Code);
     const auto result = Compile(device, Format8888UNorm, sampler, code, useCache);
-    for (const auto& binding : result.bindings) {
+    if (!arrayAddress) for (const auto& binding : result.bindings) {
         Require(binding.role != ShaderRecompiler::DescriptorRole::GuestSamplers, "emulated comparison retained a sampler binding");
         Require(std::all_of(binding.imageSamplers.begin(), binding.imageSamplers.end(), [](auto mask) { return mask == 0u; }), "emulated comparison retained an unused sampler association");
     }
@@ -211,7 +221,7 @@ void Run(AgcDriver::VulkanDevice& device, const Sampler& sampler, const char* na
 void RunConstant(AgcDriver::VulkanDevice& device, std::uint32_t swizzle, float expected, const char* name) {
     Output.fill(-1.0f);
     const std::span<const std::uint32_t> code(Code);
-    const auto result = Compile(device, Format8888UNorm, {ClampEdge, FilterBilinear}, code, swizzle);
+    const auto result = Compile(device, Format8888UNorm, {ClampEdge, FilterBilinear}, code, false, true, swizzle);
     device.Dispatch(result, 1, 1, 1, {}, reinterpret_cast<std::uintptr_t>(code.data()));
     device.WaitIdle();
     for (std::uint32_t tid = 0; tid < Threads; ++tid) {
@@ -225,9 +235,9 @@ bool BindsDepthCompare(const ShaderRecompiler::RecompileResult& result) {
     });
 }
 
-void Reject(AgcDriver::VulkanDevice& device, std::uint32_t format, const Sampler& sampler, std::string_view reason, std::span<const std::uint32_t> code = Code, bool nativeSampleOffsets = true) {
+void Reject(AgcDriver::VulkanDevice& device, std::uint32_t format, const Sampler& sampler, std::string_view reason, std::span<const std::uint32_t> code = Code, bool nativeSampleOffsets = true, std::uint32_t swizzle = 0xfacu) {
     try {
-        static_cast<void>(Compile(device, format, sampler, code, false, nativeSampleOffsets));
+        static_cast<void>(Compile(device, format, sampler, code, false, nativeSampleOffsets, swizzle));
     } catch (const std::exception& error) {
         Require(std::string_view(error.what()).find(reason) != std::string_view::npos, std::string("unexpected rejection: ") + error.what());
         return;
@@ -237,12 +247,18 @@ void Reject(AgcDriver::VulkanDevice& device, std::uint32_t format, const Sampler
 
 }
 
-int main() {
+int main(int argc, char** argv) {
     try {
         const auto device = OpenVulkanTestDevice();
         if (!device) return VulkanTestSkipped;
         FillTexels();
         FillInput();
+        if (argc == 2 && std::string_view(argv[1]) == "--array-placeholder-only") {
+            Run(*device, {ClampEdge, FilterPoint}, "array address on 2D color comparison, point", false, false, true);
+            Run(*device, {ClampEdge, FilterBilinear}, "array address on 2D color comparison, bilinear", false, false, true);
+            std::puts("array-address color comparison tests passed");
+            return 0;
+        }
         Require(BindsDepthCompare(Compile(*device, Format32Float, {ClampEdge, FilterBilinear})), "an R32 float texture left the native comparison path");
         Require(!BindsDepthCompare(Compile(*device, Format8888UNorm, {ClampEdge, FilterBilinear})), "a color texture kept a depth-compare binding");
         Run(*device, {ClampEdge, FilterPoint}, "point, clamp to edge");
@@ -262,7 +278,7 @@ int main() {
         }
         Reject(*device, Format32Float, {ClampEdge, FilterPoint}, "native comparison with a nonconstant texel offset requires", OffsetCode, false);
         Reject(*device, Format8888UInt, {ClampEdge, FilterPoint}, "unsupported format");
-        Reject(*device, Format8888UNorm, {ClampEdge, FilterPoint}, "X channel is red or a constant", 0xfadu);
+        Reject(*device, Format8888UNorm, {ClampEdge, FilterPoint}, "X channel is red or a constant", Code, true, 0xfadu);
         Reject(*device, Format8888UNorm, {ClampMirror, FilterPoint}, "wrap, clamp-to-edge or clamp-to-border");
         Reject(*device, Format8888UNorm, {ClampHalfBorder, FilterPoint}, "wrap, clamp-to-edge or clamp-to-border");
         Reject(*device, Format8888UNorm, {ClampBorder, FilterPoint, BorderTable}, "border color table");

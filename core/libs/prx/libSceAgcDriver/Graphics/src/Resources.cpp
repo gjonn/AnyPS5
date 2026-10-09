@@ -4,8 +4,26 @@
 #include "prx/libSceAgcDriver/Execution/include/PerformanceTimer.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
 #include <exception>
+#include <cstdlib>
+#include <string_view>
 
 namespace AgcDriver::Graphics {
+
+std::unique_ptr<Buffer> MakeShaderDataBuffer(const Context& context, std::size_t size, VkBufferUsageFlags usage) {
+    static const auto localUploads = [] {
+        const char* value = std::getenv("APS5_SHADER_DATA_DEVICE_LOCAL");
+        return value != nullptr && std::string_view(value) == "1";
+    }();
+    constexpr auto host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    if (localUploads) {
+        try {
+            return std::make_unique<Buffer>(context, size, usage, host | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        } catch (const std::runtime_error& error) {
+            if (std::string_view(error.what()) != "AGC graphics: required Vulkan memory type is unavailable") throw;
+        }
+    }
+    return std::make_unique<Buffer>(context, size, usage);
+}
 
 Buffer::Buffer(const Context& context, std::size_t size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties) : context(context), size(size), capacity(BufferPool::Capacity(size)), usage(usage), properties(properties) {
     Require(size != 0, "zero-sized GPU buffer");

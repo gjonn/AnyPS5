@@ -171,7 +171,7 @@ UnnormalizedProof ProveUnnormalized(const ShaderInfo& info, const ResourceSnapsh
             continue;
         }
         const auto& sampler = info.samplers[r];
-        const std::uint32_t allowed = SamplerUseExplicitLod | SamplerUseImplicitLod | SamplerUseGradient | (sampler.foldTexelOffsets ? SamplerUseOffset : 0u);
+        const std::uint32_t allowed = SamplerUseExplicitLod | SamplerUseImplicitLod | SamplerUseGradient | SamplerUseOffset;
         const std::uint32_t unsupported = sampler.uses & ~allowed;
         if (unsupported != 0u) {
             failUnnormalized(UnnormalizedUseReason(unsupported));
@@ -188,6 +188,12 @@ UnnormalizedProof ProveUnnormalized(const ShaderInfo& info, const ResourceSnapsh
             if (image.indirectRoot != ImageResource::NoIndirectImage) {
                 failUnnormalized("samples an image selected at run time");
             }
+            // The emitter produces literal components for this mode, with no
+            // image sample instruction or native unnormalized image view.
+            if (image.constantSwizzle != 0u && !image.depthCompare) continue;
+            // Emulated filtering fetches texels and applies pixel coordinates in the shader.
+            // It does not use a Vulkan unnormalized image view.
+            if ((image.emulatedFilter & EmulatedFilter::Enabled) != 0u && !image.depthCompare) continue;
             if ((image.dimension != RdnaImageDimension::Dim1D && image.dimension != RdnaImageDimension::Dim2D) || image.cube) {
                 failUnnormalized("samples a 1D-array, 2D-array, 3D, cube or multisampled image");
             }
@@ -251,6 +257,9 @@ DescriptorBindingPlan DescriptorBindingBuilder::Prepare(const IrBindingLayout& l
     if (info.images.size() > ShaderInfo::MaxImages) fail("runtime image count exceeds the static capacity");
     DescriptorBindingPlan plan;
     const auto unnormalized = ProveUnnormalized(info, snapshot);
+    for (std::uint32_t index = 0; index < info.samplers.size(); ++index) {
+        plan.specialization.push_back({PipelineSpecialization::UnnormalizedBase + index, unnormalized.samplers[index] ? 1u : 0u});
+    }
     std::vector<std::uint32_t> compareStates(info.images.size());
     for (std::uint32_t index = 0; index < info.images.size(); ++index) {
         if (!info.images[index].depthCompare) continue;
@@ -317,7 +326,7 @@ DescriptorBindingPlan DescriptorBindingBuilder::Prepare(const IrBindingLayout& l
         const auto word = snapshot.images.at(index).dwords[3];
         const auto first = (word >> 12u) & 0xfu;
         const auto last = (word >> 16u) & 0xfu;
-        if (last < first || last - first >= RuntimeAbi::StorageHeapCapacity) fail("invalid dynamic storage mip range");
+        if (last < first || last - first >= RuntimeAbi::StorageMipCapacity) fail("invalid dynamic storage mip range");
         plan.specialization.push_back({PipelineSpecialization::MipCountBase + index, last - first + 1u});
     }
     for (std::uint32_t resource = 0; resource < info.images.size(); ++resource) {

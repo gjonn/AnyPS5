@@ -24,8 +24,52 @@
 #include <list>
 #include <stdexcept>
 #include "RdnaDecoder/RdnaInstructionDecoder.hpp"
+#include "prx/libSceAgcDriver/Execution/include/ProfileOutput.hpp"
 
 namespace AgcDriver::DriverDetail {
+
+void ReuseShaderControlFlowValidation(ShaderSnapshot& snapshot, const ShaderSnapshot& previous) {
+    if (snapshot.code != previous.code) return;
+    snapshot.controlFlowValidation = previous.controlFlowValidation;
+    static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+    static std::atomic<std::uint64_t> replacements{0};
+    if (profile && (snapshot.headerAddress != previous.headerAddress || snapshot.type != previous.type || snapshot.header != previous.header)) {
+        const auto count = ++replacements;
+        if (count <= 8 || count % 100 == 0)
+            ProfilePrint_nid_no_patch("[control-flow] reused code=0x%llx old_header=0x%llx new_header=0x%llx replacements=%llu\n", static_cast<unsigned long long>(snapshot.codeAddress), static_cast<unsigned long long>(previous.headerAddress), static_cast<unsigned long long>(snapshot.headerAddress), static_cast<unsigned long long>(count));
+    }
+}
+
+void ValidateShaderControlFlow(const ShaderSnapshot& snapshot, std::size_t codeOffset) {
+    require(codeOffset < snapshot.code.size(), "control-flow entry point is outside shader snapshot");
+    auto& validation = *snapshot.controlFlowValidation;
+    std::lock_guard lock(validation.mutex);
+    if (const auto found = validation.entries.find(codeOffset); found != validation.entries.end()) {
+        if (found->second) std::rethrow_exception(found->second);
+        return;
+    }
+    const auto started = std::chrono::steady_clock::now();
+    std::exception_ptr failure;
+    try {
+        const auto decoded = ShaderRecompiler::RdnaInstructionDecoder{}.Decode(std::span(snapshot.code).subspan(codeOffset));
+        auto graph = ShaderRecompiler::GraphBuilder{}.Build(decoded);
+        ShaderRecompiler::Structurizer{}.Structurize(graph);
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::exception&) {
+        failure = std::current_exception();
+    }
+    validation.entries.emplace(codeOffset, failure);
+    static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+    static std::atomic<std::uint64_t> validations{0};
+    if (profile) {
+        const auto count = ++validations;
+        const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        if (ms >= 10.0 || count <= 8 || count % 100 == 0)
+            ProfilePrint_nid_no_patch("[control-flow] validation=%llu code=0x%llx header=0x%llx offset=%zu words=%zu ms=%.3f failed=%d\n", static_cast<unsigned long long>(count), static_cast<unsigned long long>(snapshot.codeAddress), static_cast<unsigned long long>(snapshot.headerAddress), codeOffset, snapshot.code.size(), ms, failure != nullptr);
+    }
+    if (failure) std::rethrow_exception(failure);
+}
 
 std::shared_ptr<const ShaderSnapshot> ReadRawComputeShader(std::uint64_t address) {
     GuestMemory::CheckRange(reinterpret_cast<const void*>(address), sizeof(std::uint32_t), 256);
@@ -394,9 +438,7 @@ std::vector<PreparedShaders::Entry> PrepareRegisteredImpl(const ShaderSnapshot& 
     if (address < snapshot.codeAddress || address - snapshot.codeAddress >= snapshot.code.size() * 4u) throw std::runtime_error("AGC driver: registered entry point is outside shader code");
     const auto codeOffset = static_cast<std::size_t>((address - snapshot.codeAddress) / 4u);
     const auto code = std::span(snapshot.code).subspan(codeOffset);
-    const auto decoded = ShaderRecompiler::RdnaInstructionDecoder{}.Decode(code);
-    auto graph = ShaderRecompiler::GraphBuilder{}.Build(decoded);
-    ShaderRecompiler::Structurizer{}.Structurize(graph);
+    ValidateShaderControlFlow(snapshot, codeOffset);
     std::optional<ShaderRecompiler::ShaderComputeStageInfo> compute;
     std::optional<ShaderRecompiler::ShaderPixelStageInfo> pixel;
     std::optional<ShaderRecompiler::ShaderVertexStageInfo> vertex;
@@ -767,6 +809,7 @@ void Driver::RegisterShader(const Shader* shader) {
             const auto found = shaders->find(snapshot.codeAddress);
             if (found != shaders->end()) {
                 const auto& current = *found->second;
+                ReuseShaderControlFlowValidation(snapshot, current);
                 if (current.headerAddress == snapshot.headerAddress && current.type == snapshot.type && current.code == snapshot.code && current.header == snapshot.header) {
                     transaction.Commit();
                     return;

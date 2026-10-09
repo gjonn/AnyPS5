@@ -1,0 +1,279 @@
+diff --git a/core/shader/recompiler/ControlFlow/src/Structurizer.cpp b/core/shader/recompiler/ControlFlow/src/Structurizer.cpp
+index f23bd92583..a69f1999b2 100644
+--- a/core/shader/recompiler/ControlFlow/src/Structurizer.cpp
++++ b/core/shader/recompiler/ControlFlow/src/Structurizer.cpp
+@@ -5,6 +5,7 @@
+ #include <map>
+ #include <optional>
+ #include <stdexcept>
++#include <unordered_map>
+ 
+ namespace ShaderRecompiler {
+ 
+@@ -950,8 +951,14 @@ std::optional<ControlFlowGraph> routeThroughJunction(const ControlFlowGraph& gra
+     }
+ 
+     const auto order = reversePostOrder(graph);
++    std::unordered_map<std::uint32_t, std::size_t> orderIndex;
++    orderIndex.reserve(order.size());
++    for (std::size_t i = 0; i < order.size(); ++i) {
++        orderIndex.emplace(order[i], i);
++    }
+     const auto orderOf = [&](std::uint32_t blockId) {
+-        return std::distance(order.begin(), std::find(order.begin(), order.end(), blockId));
++        const auto it = orderIndex.find(blockId);
++        return it != orderIndex.end() ? it->second : order.size();
+     };
+     std::vector<std::uint32_t> targets;
+     bool reachesMerge = false;
+@@ -1020,8 +1027,14 @@ std::optional<ControlFlowGraph> routeLoopExits(const ControlFlowGraph& graph, co
+     }
+ 
+     const auto order = reversePostOrder(graph);
++    std::unordered_map<std::uint32_t, std::size_t> orderIndex;
++    orderIndex.reserve(order.size());
++    for (std::size_t i = 0; i < order.size(); ++i) {
++        orderIndex.emplace(order[i], i);
++    }
+     const auto orderOf = [&](std::uint32_t blockId) {
+-        return std::distance(order.begin(), std::find(order.begin(), order.end(), blockId));
++        const auto it = orderIndex.find(blockId);
++        return it != orderIndex.end() ? it->second : order.size();
+     };
+     std::vector<std::uint32_t> targets;
+     for (const auto& edge : exits) {
+diff --git a/core/shader/recompiler/Optimization/include/Optimization/SrtWalker/SrtEvaluator.hpp b/core/shader/recompiler/Optimization/include/Optimization/SrtWalker/SrtEvaluator.hpp
+index 7877c59284..a75faa6692 100644
+--- a/core/shader/recompiler/Optimization/include/Optimization/SrtWalker/SrtEvaluator.hpp
++++ b/core/shader/recompiler/Optimization/include/Optimization/SrtWalker/SrtEvaluator.hpp
+@@ -6,6 +6,7 @@
+ 
+ #include <cstdint>
+ #include <span>
++#include <unordered_set>
+ #include <vector>
+ 
+ namespace ShaderRecompiler::Detail {
+@@ -89,7 +90,7 @@ class Evaluator {
+     Evaluator* _cleanEvaluator = nullptr;
+     IrValue* _activeMask = nullptr;
+     EvaluatedValues _cache;
+-    std::vector<IrValue*> _visiting;
++    std::unordered_set<IrValue*> _visiting;
+ };
+ 
+ }
+diff --git a/core/shader/recompiler/Optimization/include/Optimization/SrtWalker/SrtPlanBuilder.hpp b/core/shader/recompiler/Optimization/include/Optimization/SrtWalker/SrtPlanBuilder.hpp
+index f79ffe82e0..f322d64d39 100644
+--- a/core/shader/recompiler/Optimization/include/Optimization/SrtWalker/SrtPlanBuilder.hpp
++++ b/core/shader/recompiler/Optimization/include/Optimization/SrtWalker/SrtPlanBuilder.hpp
+@@ -4,6 +4,7 @@
+ #include "IntermediateRepresentation/IrProgram.hpp"
+ 
+ #include <cstdint>
++#include <unordered_set>
+ #include <vector>
+ 
+ namespace ShaderRecompiler::Detail {
+@@ -26,7 +27,8 @@ class PlanBuilder {
+ 
+     IrProgram& _program;
+     std::vector<IrValue*> _visiting;
+-    std::vector<IrValue*> _visited;
++    std::unordered_set<IrValue*> _visitingSet;
++    std::unordered_set<IrValue*> _visited;
+     std::vector<Patch> _patches;
+ };
+ 
+diff --git a/core/shader/recompiler/Optimization/src/SrtWalker/SrtEvaluator.cpp b/core/shader/recompiler/Optimization/src/SrtWalker/SrtEvaluator.cpp
+index ec3347d8fc..479d36542c 100644
+--- a/core/shader/recompiler/Optimization/src/SrtWalker/SrtEvaluator.cpp
++++ b/core/shader/recompiler/Optimization/src/SrtWalker/SrtEvaluator.cpp
+@@ -45,13 +45,12 @@ bool Evaluator::EvaluateWide(IrValue* raw, std::uint64_t& result) {
+     if (_cache.Find(inst, result)) {
+         return true;
+     }
+-    if (std::find(_visiting.begin(), _visiting.end(), inst) != _visiting.end()) {
++    if (!_visiting.insert(inst).second) {
+         return false;
+     }
+-    _visiting.push_back(inst);
+     std::uint64_t out = 0;
+     const bool evaluated = EvaluateInst(*inst, out);
+-    _visiting.pop_back();
++    _visiting.erase(inst);
+     if (!evaluated) {
+         static const bool debug = std::getenv("APS5_SRT_DEBUG") != nullptr;
+         if (debug) std::fprintf(stderr, "[srt] cannot evaluate %s (%zu arguments)\n", std::string(IrOpcodeName(inst->Opcode())).c_str(), inst->ArgumentCount());
+diff --git a/core/shader/recompiler/Optimization/src/SrtWalker/SrtPlanBuilder.cpp b/core/shader/recompiler/Optimization/src/SrtWalker/SrtPlanBuilder.cpp
+index e3e0af4223..0c1f5c22cd 100644
+--- a/core/shader/recompiler/Optimization/src/SrtWalker/SrtPlanBuilder.cpp
++++ b/core/shader/recompiler/Optimization/src/SrtWalker/SrtPlanBuilder.cpp
+@@ -49,23 +49,25 @@ void PlanBuilder::Collect(IrValue* raw, std::uint32_t usePc) {
+         return;
+     }
+     IrValue* inst = value;
+-    const auto cycle = std::find(_visiting.begin(), _visiting.end(), inst);
+-    if (cycle != _visiting.end()) {
++    if (_visitingSet.contains(inst)) {
++        const auto cycle = std::find(_visiting.begin(), _visiting.end(), inst);
+         const auto containsPhi = std::any_of(cycle, _visiting.end(), [](IrValue* candidate) { return candidate->Opcode() == IrOpcode::Phi; });
+         if (containsPhi) {
+             return;
+         }
+         Fail(_program.Resources(), usePc, "cyclic typed planning value " + std::string(IrOpcodeName(inst->Opcode())) + " without a phi");
+     }
+-    if (std::find(_visited.begin(), _visited.end(), inst) != _visited.end()) {
++    if (_visited.contains(inst)) {
+         return;
+     }
+     _visiting.push_back(inst);
++    _visitingSet.insert(inst);
+     for (std::size_t index = 0; index < inst->ArgumentCount(); index++) {
+         Collect(inst->Argument(index), usePc);
+     }
+     _visiting.pop_back();
+-    _visited.push_back(inst);
++    _visitingSet.erase(inst);
++    _visited.insert(inst);
+     if (!IsRawRead(_program.Resources(), *inst)) {
+         return;
+     }
+diff --git a/core/shader/recompiler/SpirvBackend/include/SpirvBackend/SpirvEmitterState.hpp b/core/shader/recompiler/SpirvBackend/include/SpirvBackend/SpirvEmitterState.hpp
+index 8fb8e187b8..23bca8fd31 100644
+--- a/core/shader/recompiler/SpirvBackend/include/SpirvBackend/SpirvEmitterState.hpp
++++ b/core/shader/recompiler/SpirvBackend/include/SpirvBackend/SpirvEmitterState.hpp
+@@ -91,6 +91,8 @@ struct SpirvEmitterState {
+     std::uint32_t spirvVersion = 0x00010300u;
+     std::span<const std::uint32_t> supportedCapabilities;
+     std::span<const std::string_view> supportedExtensions;
++    std::unordered_set<std::uint32_t> capabilitySet;
++    std::unordered_set<std::string_view> extensionSet;
+     bool nonConstantImageOffsets = false;
+     // A bindless table's runtime slot is wave-uniform; it is uniform over the invocation group
+     // only for a single-wave compute workgroup, elsewhere it needs the NonUniform decoration.
+diff --git a/core/shader/recompiler/SpirvBackend/src/SpirvEmitter.cpp b/core/shader/recompiler/SpirvBackend/src/SpirvEmitter.cpp
+index 596d281b1f..3ace6e154d 100644
+--- a/core/shader/recompiler/SpirvBackend/src/SpirvEmitter.cpp
++++ b/core/shader/recompiler/SpirvBackend/src/SpirvEmitter.cpp
+@@ -247,6 +247,8 @@ std::vector<std::uint32_t> SpirvEmitter::Emit(const IrProgram& program, const Sh
+     state.spirvVersion = target.spirvVersion;
+     state.supportedCapabilities = target.supportedCapabilities;
+     state.supportedExtensions = target.supportedExtensions;
++    state.capabilitySet = {target.supportedCapabilities.begin(), target.supportedCapabilities.end()};
++    state.extensionSet = {target.supportedExtensions.begin(), target.supportedExtensions.end()};
+     state.nonConstantImageOffsets = target.nonConstantImageOffsets;
+     state.hostSubgroupSize = target.subgroupSize;
+     state.splitSubgroup = program.WaveSize() == 32u && target.subgroupSize > 32u;
+diff --git a/core/shader/recompiler/SpirvBackend/src/SpirvImageEmitter.cpp b/core/shader/recompiler/SpirvBackend/src/SpirvImageEmitter.cpp
+index 9c8599186e..880886afa7 100644
+--- a/core/shader/recompiler/SpirvBackend/src/SpirvImageEmitter.cpp
++++ b/core/shader/recompiler/SpirvBackend/src/SpirvImageEmitter.cpp
+@@ -1210,8 +1210,7 @@ void EmitSampleOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, con
+         operands.push_back(AddressF32(ctx, access, setup.layout.bias));
+     }
+     if (setup.layout.clamp != NoImageComponent) {
+-        const auto& capabilities = state.supportedCapabilities;
+-        if (std::find(capabilities.begin(), capabilities.end(), static_cast<std::uint32_t>(spv::CapabilityMinLod)) == capabilities.end()) ctx.Fail(access.inst, "clamps its LOD, which needs the device's shaderResourceMinLod");
++        if (!state.capabilitySet.contains(static_cast<std::uint32_t>(spv::CapabilityMinLod))) ctx.Fail(access.inst, "clamps its LOD, which needs the device's shaderResourceMinLod");
+         const auto clamp = AddressF32(ctx, access, setup.layout.clamp);
+         if ((operandMask & spv::ImageOperandsLodMask) != 0u) {
+             const auto clamped = state.module.AllocateId();
+@@ -1231,7 +1230,7 @@ void EmitSampleOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, con
+         return value->HasImmediate() ? value : nullptr;
+     };
+     if (setup.layout.offset != NoImageComponent && constantOffset() == nullptr) {
+-        const bool gatherExtended = std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), static_cast<std::uint32_t>(spv::CapabilityImageGatherExtended)) != state.supportedCapabilities.end();
++        const bool gatherExtended = state.capabilitySet.contains(static_cast<std::uint32_t>(spv::CapabilityImageGatherExtended));
+         if (!state.nonConstantImageOffsets || !gatherExtended) {
+             ctx.Fail(access.inst, "has a texel offset that is not a constant, which image sampling takes only with VK_KHR_maintenance8 and shaderImageGatherExtended");
+         }
+diff --git a/core/shader/recompiler/SpirvBackend/src/SpirvMemory/SpirvDescriptors.cpp b/core/shader/recompiler/SpirvBackend/src/SpirvMemory/SpirvDescriptors.cpp
+index f74ae1b0b3..1c34b3c156 100644
+--- a/core/shader/recompiler/SpirvBackend/src/SpirvMemory/SpirvDescriptors.cpp
++++ b/core/shader/recompiler/SpirvBackend/src/SpirvMemory/SpirvDescriptors.cpp
+@@ -58,11 +58,8 @@ std::uint32_t DescriptorElementPointer(SpirvEmitterState& state, std::uint32_t r
+ // VK_EXT_descriptor_indexing on the device.
+ std::uint32_t TableImageIndex(SpirvEmitterState& state, DescriptorBindingKind kind, std::uint32_t resource, std::uint32_t arrayIndex, std::uint32_t slotId) {
+     const bool storage = ImageBindingResourceClass(kind) == ImageResourceClass::Storage;
+-    const auto supported = [&](std::uint32_t capability) {
+-        return std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), capability) != state.supportedCapabilities.end();
+-    };
+     const auto dynamic = storage ? spv::CapabilityStorageImageArrayDynamicIndexing : spv::CapabilitySampledImageArrayDynamicIndexing;
+-    if (!supported(dynamic)) {
++    if (!state.capabilitySet.contains(dynamic)) {
+         ExitDescriptorBindingFailure(state, kind, resource, "bindless image table needs image array dynamic indexing, which the device lacks");
+     }
+     state.module.EmitCapability(dynamic);
+@@ -72,7 +69,7 @@ std::uint32_t TableImageIndex(SpirvEmitterState& state, DescriptorBindingKind ki
+     }
+     const auto nonUniform = storage ? spv::CapabilityStorageImageArrayNonUniformIndexing : spv::CapabilitySampledImageArrayNonUniformIndexing;
+     const bool extension = state.spirvVersion < 0x00010500u;
+-    if (!supported(spv::CapabilityShaderNonUniform) || !supported(nonUniform) || (extension && std::find(state.supportedExtensions.begin(), state.supportedExtensions.end(), "SPV_EXT_descriptor_indexing") == state.supportedExtensions.end())) {
++    if (!state.capabilitySet.contains(static_cast<std::uint32_t>(spv::CapabilityShaderNonUniform)) || !state.capabilitySet.contains(nonUniform) || (extension && !state.extensionSet.contains("SPV_EXT_descriptor_indexing"))) {
+         ResourceMaterializer::CountBindlessRejection(BindlessRejection::NonUniform);
+         throw std::runtime_error("bindless image table: the slot is not uniform over the workgroup and the device lacks non-uniform image indexing");
+     }
+diff --git a/core/shader/recompiler/SpirvBackend/src/SpirvMemory/SpirvModuleSetup.cpp b/core/shader/recompiler/SpirvBackend/src/SpirvMemory/SpirvModuleSetup.cpp
+index 49f70b1f37..eb97da3458 100644
+--- a/core/shader/recompiler/SpirvBackend/src/SpirvMemory/SpirvModuleSetup.cpp
++++ b/core/shader/recompiler/SpirvBackend/src/SpirvMemory/SpirvModuleSetup.cpp
+@@ -77,7 +77,7 @@ void DefineModule(SpirvEmitterState& state) {
+         state.module.EmitExtension(extension);
+     }
+     if (state.requirements.bufferInt64Atomics) {
+-        if (std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), static_cast<std::uint32_t>(spv::CapabilityInt64Atomics)) == state.supportedCapabilities.end()) {
++        if (!state.capabilitySet.contains(static_cast<std::uint32_t>(spv::CapabilityInt64Atomics))) {
+             FailEmit("64-bit buffer atomics need shaderBufferInt64Atomics");
+         }
+         state.module.EmitCapability(spv::CapabilityInt64);
+@@ -87,7 +87,7 @@ void DefineModule(SpirvEmitterState& state) {
+         state.module.EmitCapability(spv::CapabilityInt64);
+     }
+     if (state.requirements.imageInt64Atomics) {
+-        if (std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), static_cast<std::uint32_t>(spv::CapabilityInt64ImageEXT)) == state.supportedCapabilities.end()) {
++        if (!state.capabilitySet.contains(static_cast<std::uint32_t>(spv::CapabilityInt64ImageEXT))) {
+             FailEmit("64-bit image atomics need VK_EXT_shader_image_atomic_int64");
+         }
+         state.module.EmitCapability(spv::CapabilityInt64);
+@@ -142,7 +142,7 @@ void DefineModule(SpirvEmitterState& state) {
+     state.module.EmitExtension("SPV_KHR_float_controls");
+     state.module.AddExecutionMode(state.mainFunc, spv::ExecutionModeSignedZeroInfNanPreserve, 32u);
+     if (state.requirements.float64) {
+-        if (std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), static_cast<std::uint32_t>(spv::CapabilityFloat64)) == state.supportedCapabilities.end()) {
++        if (!state.capabilitySet.contains(static_cast<std::uint32_t>(spv::CapabilityFloat64))) {
+             throw std::runtime_error("64-bit float instructions need the Float64 capability, which the device lacks");
+         }
+         state.module.EmitCapability(spv::CapabilityFloat64);
+@@ -180,7 +180,7 @@ void DefineModule(SpirvEmitterState& state) {
+             state.module.AddExecutionMode(state.mainFunc, spv::ExecutionModeEarlyFragmentTests);
+         }
+         if (pixel.psOrderedPixelShader) {
+-            if (std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), static_cast<std::uint32_t>(spv::CapabilityFragmentShaderPixelInterlockEXT)) == state.supportedCapabilities.end()) {
++            if (!state.capabilitySet.contains(static_cast<std::uint32_t>(spv::CapabilityFragmentShaderPixelInterlockEXT))) {
+                 throw std::runtime_error("a primitive-ordered pixel shader needs the fragmentShaderPixelInterlock feature, which the device lacks");
+             }
+             state.module.EmitCapability(spv::CapabilityFragmentShaderPixelInterlockEXT);
+diff --git a/core/shader/recompiler/Translation/src/EmbeddedVertexFetch.cpp b/core/shader/recompiler/Translation/src/EmbeddedVertexFetch.cpp
+index 4fda5df13d..67ee2d84b1 100644
+--- a/core/shader/recompiler/Translation/src/EmbeddedVertexFetch.cpp
++++ b/core/shader/recompiler/Translation/src/EmbeddedVertexFetch.cpp
+@@ -3,6 +3,7 @@
+ #include <array>
+ #include <map>
+ #include <stdexcept>
++#include <unordered_set>
+ 
+ namespace ShaderRecompiler {
+ 
+@@ -439,8 +440,9 @@ EmbeddedFetchPlan EmbeddedVertexFetchAnalyzer::Analyze(const RdnaProgram& progra
+     plan.instanceOffsetConflict = instanceOffsetConflict;
+     const auto shared = [&](std::int32_t sgpr, const std::vector<std::uint32_t>& addPcs) {
+         if (sgpr < 0) return false;
++        const std::unordered_set<std::uint32_t> addPcSet(addPcs.begin(), addPcs.end());
+         for (const auto& inst : program.instructions) {
+-            if (std::find(addPcs.begin(), addPcs.end(), inst.programCounter) != addPcs.end()) continue;
++            if (addPcSet.contains(inst.programCounter)) continue;
+             if (touchesSgpr(inst, static_cast<std::uint32_t>(sgpr))) return true;
+         }
+         return false;

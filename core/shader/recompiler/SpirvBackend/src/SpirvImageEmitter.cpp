@@ -1398,92 +1398,119 @@ void EmitSampleOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, con
         EmitEmulatedFilterSample(ctx, access, setup);
         return;
     }
-    const auto& samplerResources = state.program.Resources().info.samplers;
-    const bool unnormalized = !setup.dref && mem.sampler < samplerResources.size() && samplerResources[mem.sampler].unnormalized;
-    const bool explicitLod = unnormalized || ImageSampleExplicitLod(mem.imageSampleFlags, state.program.Resources().stage);
-    std::uint32_t opcode = spv::OpImageSampleImplicitLod;
-    if (explicitLod) {
-        opcode = setup.dref ? spv::OpImageSampleDrefExplicitLod : spv::OpImageSampleExplicitLod;
-    } else if (setup.dref) {
-        opcode = spv::OpImageSampleDrefImplicitLod;
-    }
-    std::uint32_t resultType = ImageVectorType(state, setup.numericClass, 4);
-    std::uint32_t drefValue = 0;
-    if (setup.dref) {
-        resultType = TypeF32(state);
-        drefValue = DrefValueF32(ctx, access, setup.layout);
-    }
-    std::uint32_t operandMask = 0;
-    std::vector<std::uint32_t> operands;
-    if (!unnormalized && HasFlag(mem, RdnaImageSampleFlagDerivative)) {
-        operandMask |= spv::ImageOperandsGradMask;
-        operands.push_back(CoordF32(ctx, access, setup.layout.gradX, setup.dimensionInfo.spatialComponents, AddressDimension(access).spatialComponents));
-        operands.push_back(CoordF32(ctx, access, setup.layout.gradY, setup.dimensionInfo.spatialComponents, AddressDimension(access).spatialComponents));
-    } else if (explicitLod) {
-        operandMask |= spv::ImageOperandsLodMask;
-        operands.push_back(!unnormalized && HasFlag(mem, RdnaImageSampleFlagLod) ? AddressF32(ctx, access, setup.layout.lod) : ZeroF32(state));
-    } else if (setup.layout.bias != NoImageComponent) {
-        operandMask |= spv::ImageOperandsBiasMask;
-        operands.push_back(AddressF32(ctx, access, setup.layout.bias));
-    }
-    if (!unnormalized && setup.layout.clamp != NoImageComponent) {
-        const auto& capabilities = state.supportedCapabilities;
-        if (std::find(capabilities.begin(), capabilities.end(), static_cast<std::uint32_t>(spv::CapabilityMinLod)) == capabilities.end()) ctx.Fail(access.inst, "clamps its LOD, which needs the device's shaderResourceMinLod");
-        const auto clamp = AddressF32(ctx, access, setup.layout.clamp);
-        if ((operandMask & spv::ImageOperandsLodMask) != 0u) {
-            const auto clamped = state.module.AllocateId();
-            state.module.AddFunction(spv::OpExtInst, TypeF32(state), clamped, GlslStd450(state), GLSLstd450FMax, operands.back(), clamp);
-            operands.back() = clamped;
-        } else {
-            state.module.EmitCapability(spv::CapabilityMinLod);
-            operandMask |= spv::ImageOperandsMinLodMask;
-            operands.push_back(clamp);
+    const auto resultType = setup.dref ? TypeF32(state) : ImageVectorType(state, setup.numericClass, 4);
+    const auto emitNative = [&](bool unnormalized) {
+        const bool explicitLod = unnormalized || ImageSampleExplicitLod(mem.imageSampleFlags, state.program.Resources().stage);
+        std::uint32_t opcode = spv::OpImageSampleImplicitLod;
+        if (explicitLod) {
+            opcode = setup.dref ? spv::OpImageSampleDrefExplicitLod : spv::OpImageSampleExplicitLod;
+        } else if (setup.dref) {
+            opcode = spv::OpImageSampleDrefImplicitLod;
         }
-    }
-    const bool foldOffset = setup.layout.offset != NoImageComponent && state.program.Info().samplers.at(mem.sampler).foldTexelOffsets;
-    const bool offsetOperand = setup.layout.offset != NoImageComponent && !foldOffset;
-    const auto constantOffset = [&]() -> const IrValue* {
-        const auto component = GetRdnaImageAddressComponentLayout(mem.imageSampleFlags, setup.layout.offset);
-        const auto argument = component.bitOffset / 32u;
-        if (component.bitWidth != 32u || argument >= access.address.ArgumentCount()) return nullptr;
-        const auto* value = access.address.Argument(argument)->Resolve();
-        return value->HasImmediate() ? value : nullptr;
-    };
-    if (offsetOperand && constantOffset() == nullptr) {
-        const bool gatherExtended = std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), static_cast<std::uint32_t>(spv::CapabilityImageGatherExtended)) != state.supportedCapabilities.end();
-        if (!state.nonConstantImageOffsets || !gatherExtended) {
-            ctx.Fail(access.inst, "has a texel offset that is not a constant, which image sampling takes only with VK_KHR_maintenance8 and shaderImageGatherExtended");
+        std::uint32_t resultType = ImageVectorType(state, setup.numericClass, 4);
+        std::uint32_t drefValue = 0;
+        if (setup.dref) {
+            resultType = TypeF32(state);
+            drefValue = DrefValueF32(ctx, access, setup.layout);
         }
-        state.module.EmitCapability(spv::CapabilityImageGatherExtended);
-        operandMask |= spv::ImageOperandsOffsetMask;
-        operands.insert(operands.end() - ((operandMask & spv::ImageOperandsMinLodMask) != 0u ? 1 : 0), PackedOffset(ctx, access, setup.layout));
-    } else if (offsetOperand) {
-        const auto bits = constantOffset()->ImmediateU32();
-        std::array<std::uint32_t, 3> values{};
-        for (std::uint32_t index = 0; index < setup.dimensionInfo.spatialComponents; index++) {
-            const auto field = (bits >> (index * 8u)) & 0x3fu;
-            values[index] = ConstantI32(state, static_cast<std::int32_t>(field ^ 0x20u) - 0x20);
+        std::uint32_t operandMask = 0;
+        std::vector<std::uint32_t> operands;
+        if (!unnormalized && HasFlag(mem, RdnaImageSampleFlagDerivative)) {
+            operandMask |= spv::ImageOperandsGradMask;
+            operands.push_back(CoordF32(ctx, access, setup.layout.gradX, setup.dimensionInfo.spatialComponents, AddressDimension(access).spatialComponents));
+            operands.push_back(CoordF32(ctx, access, setup.layout.gradY, setup.dimensionInfo.spatialComponents, AddressDimension(access).spatialComponents));
+        } else if (explicitLod) {
+            operandMask |= spv::ImageOperandsLodMask;
+            operands.push_back(!unnormalized && HasFlag(mem, RdnaImageSampleFlagLod) ? AddressF32(ctx, access, setup.layout.lod) : ZeroF32(state));
+        } else if (setup.layout.bias != NoImageComponent) {
+            operandMask |= spv::ImageOperandsBiasMask;
+            operands.push_back(AddressF32(ctx, access, setup.layout.bias));
         }
-        const auto count = setup.dimensionInfo.spatialComponents;
-        const auto offset = count == 1u ? values[0] : count == 2u
-            ? state.module.Constant(spv::OpConstantComposite, TypeI32Vector(state, 2), values[0], values[1])
-            : state.module.Constant(spv::OpConstantComposite, TypeI32Vector(state, 3), values[0], values[1], values[2]);
-        operandMask |= spv::ImageOperandsConstOffsetMask;
-        operands.insert(operands.end() - ((operandMask & spv::ImageOperandsMinLodMask) != 0u ? 1 : 0), offset);
+        if (!unnormalized && setup.layout.clamp != NoImageComponent) {
+            const auto& capabilities = state.supportedCapabilities;
+            if (std::find(capabilities.begin(), capabilities.end(), static_cast<std::uint32_t>(spv::CapabilityMinLod)) == capabilities.end()) ctx.Fail(access.inst, "clamps its LOD, which needs the device's shaderResourceMinLod");
+            const auto clamp = AddressF32(ctx, access, setup.layout.clamp);
+            if ((operandMask & spv::ImageOperandsLodMask) != 0u) {
+                const auto clamped = state.module.AllocateId();
+                state.module.AddFunction(spv::OpExtInst, TypeF32(state), clamped, GlslStd450(state), GLSLstd450FMax, operands.back(), clamp);
+                operands.back() = clamped;
+            } else {
+                state.module.EmitCapability(spv::CapabilityMinLod);
+                operandMask |= spv::ImageOperandsMinLodMask;
+                operands.push_back(clamp);
+            }
+        }
+        const bool foldOffset = setup.layout.offset != NoImageComponent && unnormalized;
+        const bool offsetOperand = setup.layout.offset != NoImageComponent && !foldOffset;
+        const auto constantOffset = [&]() -> const IrValue* {
+            const auto component = GetRdnaImageAddressComponentLayout(mem.imageSampleFlags, setup.layout.offset);
+            const auto argument = component.bitOffset / 32u;
+            if (component.bitWidth != 32u || argument >= access.address.ArgumentCount()) return nullptr;
+            const auto* value = access.address.Argument(argument)->Resolve();
+            return value->HasImmediate() ? value : nullptr;
+        };
+        if (offsetOperand && constantOffset() == nullptr) {
+            const bool gatherExtended = std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), static_cast<std::uint32_t>(spv::CapabilityImageGatherExtended)) != state.supportedCapabilities.end();
+            if (!state.nonConstantImageOffsets || !gatherExtended) {
+                ctx.Fail(access.inst, "has a texel offset that is not a constant, which image sampling takes only with VK_KHR_maintenance8 and shaderImageGatherExtended");
+            }
+            state.module.EmitCapability(spv::CapabilityImageGatherExtended);
+            operandMask |= spv::ImageOperandsOffsetMask;
+            operands.insert(operands.end() - ((operandMask & spv::ImageOperandsMinLodMask) != 0u ? 1 : 0), PackedOffset(ctx, access, setup.layout));
+        } else if (offsetOperand) {
+            const auto bits = constantOffset()->ImmediateU32();
+            std::array<std::uint32_t, 3> values{};
+            for (std::uint32_t index = 0; index < setup.dimensionInfo.spatialComponents; index++) {
+                const auto field = (bits >> (index * 8u)) & 0x3fu;
+                values[index] = ConstantI32(state, static_cast<std::int32_t>(field ^ 0x20u) - 0x20);
+            }
+            const auto count = setup.dimensionInfo.spatialComponents;
+            const auto offset = count == 1u ? values[0] : count == 2u
+                ? state.module.Constant(spv::OpConstantComposite, TypeI32Vector(state, 2), values[0], values[1])
+                : state.module.Constant(spv::OpConstantComposite, TypeI32Vector(state, 3), values[0], values[1], values[2]);
+            operandMask |= spv::ImageOperandsConstOffsetMask;
+            operands.insert(operands.end() - ((operandMask & spv::ImageOperandsMinLodMask) != 0u ? 1 : 0), offset);
 
+        }
+        const auto coord = foldOffset ? FoldedOffsetCoord(ctx, access, setup) : setup.coord;
+        const auto sampled = MakeSampledImage(state, mem.resource, mem.sampler, access.slot);
+        const auto sample = state.module.AllocateId();
+        std::vector<std::uint32_t> words = {opcode, resultType, sample, sampled, coord};
+        if (setup.dref) {
+            words.push_back(drefValue);
+        }
+        if (operandMask != 0u) {
+            words.push_back(operandMask);
+            words.insert(words.end(), operands.begin(), operands.end());
+        }
+        state.module.AddFunction(words);
+        return sample;
+    };
+    std::uint32_t sample;
+    const bool nativeUnnormalized = !setup.dref && !image.cube && !image.packed && image.conversionFormat == IrBufferFormat::Invalid &&
+        (image.dimension == RdnaImageDimension::Dim1D || image.dimension == RdnaImageDimension::Dim2D);
+    if (nativeUnnormalized) {
+        const auto selector = state.module.SpecializationConstant(TypeU32(state), PipelineSpecialization::UnnormalizedBase + mem.sampler, 0u);
+        const auto condition = Binary(state, spv::OpINotEqual, TypeBool(state), selector, ConstantU32(state, 0u));
+        const auto pixelLabel = state.module.AllocateId();
+        const auto normalizedLabel = state.module.AllocateId();
+        const auto merge = state.module.AllocateId();
+        state.module.AddFunction(spv::OpSelectionMerge, merge, spv::SelectionControlMaskNone);
+        state.module.AddFunction(spv::OpBranchConditional, condition, pixelLabel, normalizedLabel);
+        EmitLabel(state, pixelLabel);
+        const auto pixelSample = emitNative(true);
+        const auto pixelEnd = state.currentLabel;
+        state.module.AddFunction(spv::OpBranch, merge);
+        EmitLabel(state, normalizedLabel);
+        const auto normalizedSample = emitNative(false);
+        const auto normalizedEnd = state.currentLabel;
+        state.module.AddFunction(spv::OpBranch, merge);
+        EmitLabel(state, merge);
+        sample = state.module.AllocateId();
+        state.module.AddFunction(spv::OpPhi, resultType, sample, pixelSample, pixelEnd, normalizedSample, normalizedEnd);
+    } else {
+        sample = emitNative(false);
     }
-    const auto coord = foldOffset ? FoldedOffsetCoord(ctx, access, setup) : setup.coord;
-    const auto sampled = MakeSampledImage(state, mem.resource, mem.sampler, access.slot);
-    const auto sample = state.module.AllocateId();
-    std::vector<std::uint32_t> words = {opcode, resultType, sample, sampled, coord};
-    if (setup.dref) {
-        words.push_back(drefValue);
-    }
-    if (operandMask != 0u) {
-        words.push_back(operandMask);
-        words.insert(words.end(), operands.begin(), operands.end());
-    }
-    state.module.AddFunction(words);
     const auto result = setup.dref ? sample : UnpackImageTexel(ctx, access, sample);
     ctx.Define(access.inst, TableResult(ctx, access, ResultVector(ctx, access, result, setup.numericClass, setup.dref, false)));
 }

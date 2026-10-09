@@ -40,6 +40,8 @@ private:
     std::shared_ptr<BufferPool> cache;
 };
 
+std::unique_ptr<Buffer> MakeShaderDataBuffer(const Context& context, std::size_t size, VkBufferUsageFlags usage);
+
 // Device-local scratch memory for GPU-side layout conversion. The detiler reads and writes scattered
 // elements, which crawls across PCIe, so guest bytes move between host and device buffers with DMA
 // copies and are only swizzled in video memory.

@@ -1,0 +1,3 @@
+[0/2] Re-checking globbed directories...
+[1/3] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/agc_driver_tests.dir/tests/Submit.cpp.obj
+[2/3] Linking CXX executable tests\agc_driver_tests.exe

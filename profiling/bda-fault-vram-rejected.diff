@@ -1,0 +1,77 @@
+diff --git a/core/libs/prx/libSceAgcDriver/Graphics/src/BdaResources.cpp b/core/libs/prx/libSceAgcDriver/Graphics/src/BdaResources.cpp
+index 605809a5..01cbaffa 100644
+--- a/core/libs/prx/libSceAgcDriver/Graphics/src/BdaResources.cpp
++++ b/core/libs/prx/libSceAgcDriver/Graphics/src/BdaResources.cpp
+@@ -1,6 +1,7 @@
+ #include "prx/libSceAgcDriver/Graphics/include/BdaResources.hpp"
+ #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
+ #include <algorithm>
++#include <array>
+ #include <atomic>
+ #include <bit>
+ #include <cstdio>
+@@ -10,11 +11,34 @@
+ #include <list>
+ #include <mutex>
+ #include <sstream>
++#include <string_view>
+ 
+ namespace AgcDriver::Graphics {
+ 
+ namespace {
+ 
++bool faultDeviceLocalEnabled() {
++    static const bool enabled = [] {
++        const char* value = std::getenv("APS5_BDA_FAULT_DEVICE_LOCAL");
++        return value != nullptr && std::string_view(value) == "1";
++    }();
++    return enabled;
++}
++
++std::unique_ptr<Buffer> makeFaultBuffer(const Context& context) {
++    constexpr auto size = ShaderRecompiler::BdaAbi::FaultBufferBytes;
++    constexpr auto usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
++    if (faultDeviceLocalEnabled()) {
++        constexpr auto properties = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
++        try {
++            return std::make_unique<Buffer>(context, size, usage, properties);
++        } catch (const std::runtime_error& error) {
++            if (std::string_view(error.what()) != "AGC graphics: required Vulkan memory type is unavailable") throw;
++        }
++    }
++    return std::make_unique<Buffer>(context, size, usage);
++}
++
+ // The page tables built per device, reused by a build whose ranges (guest ranges, device
+ // addresses, permissions) equal one of them: consecutive address-based builds map the same registered
+ // set through the same imports and mirrors, so the ~1200-entry table repeats. The shader only reads
+@@ -123,7 +147,7 @@ std::uint64_t hashRanges(const std::vector<ShaderRecompiler::BdaAbi::Range>& ran
+ BdaResources::BdaResources(const Context& context) {
+     static_assert(std::endian::native == std::endian::little);
+     Require(ShaderRecompiler::BdaAbi::FaultBufferBytes <= context.limits.maxStorageBufferRange, "BDA fault buffer exceeds storage buffer range limit");
+-    fault = std::make_unique<Buffer>(context, ShaderRecompiler::BdaAbi::FaultBufferBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
++    fault = makeFaultBuffer(context);
+     std::memset(fault->Bytes().data(), 0, fault->Bytes().size());
+ }
+ 
+@@ -276,10 +300,18 @@ namespace AgcDriver::Graphics {
+ void BdaResources::markWrittenPages() const {
+     namespace Abi = ShaderRecompiler::BdaAbi;
+     auto* words = reinterpret_cast<std::uint32_t*>(fault->Bytes().data());
+-    Require(words[Abi::WrittenOverflowWord] == 0, "more than " + std::to_string(Abi::WrittenPageSlots) + " pages stored to through the BDA table in one use are not implemented");
++    // Scan cached CPU bytes instead of issuing one uncached PCIe read per slot.
++    // CheckFault runs only after the owning GPU work has completed.
++    std::array<std::uint32_t, Abi::FaultBufferBytes / sizeof(std::uint32_t)> snapshot;
++    const auto* read = words;
++    if (faultDeviceLocalEnabled()) {
++        std::memcpy(snapshot.data(), words, sizeof(snapshot));
++        read = snapshot.data();
++    }
++    Require(read[Abi::WrittenOverflowWord] == 0, "more than " + std::to_string(Abi::WrittenPageSlots) + " pages stored to through the BDA table in one use are not implemented");
+     bool any = false;
+     for (std::uint32_t slot = 0; slot < Abi::WrittenPageSlots; ++slot) {
+-        const auto page = words[Abi::WrittenSlotsWord + slot];
++        const auto page = read[Abi::WrittenSlotsWord + slot];
+         if (page == 0) continue;
+         GuestMemory::MarkWritten(static_cast<std::uint64_t>(page - 1u) << Abi::WrittenPageShift, std::size_t{1} << Abi::WrittenPageShift);
+         any = true;

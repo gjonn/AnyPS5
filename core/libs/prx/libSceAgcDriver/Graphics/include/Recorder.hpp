@@ -442,7 +442,10 @@ public:
     // accesses (see Commands), on the [barriers] line as 'merged'. Debug aid: APS5_FULL_BARRIERS=1
     // (or APS5_NO_BARRIER_ELISION=1) records every leading barrier, as before.
     static bool MergeBarriers();
+    static bool MergeDrawBarriers();
+    static constexpr VkAccessFlags DrawBarrierAccess = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
     static void CountMerged(CommandClass which);
+    static std::uint64_t MergedBarriers(CommandClass which);
     // Hazard tracker, counting mode (APS5_BARRIER_VALIDATE=1): every command tells the tracker
     // what it reads and writes (guest ranges through host imports, images) with its stage before
     // it is recorded; the tracker simulates barriers emitted only on a hazard against the accesses

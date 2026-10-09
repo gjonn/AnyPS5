@@ -53,6 +53,33 @@ alignas(256) constexpr std::array<std::uint32_t, 17> VolumeCode{
     0xbf810000,
 };
 
+alignas(256) constexpr auto MsaaAddressCode = [] {
+    std::array<std::uint32_t, 19> code{};
+    std::copy_n(VolumeCode.begin(), 5, code.begin());
+    code[5] = 0xe0301054u;
+    code[6] = 0x80001501u; // sample index in v21, after XY in v19:v20
+    std::copy(VolumeCode.begin() + 5, VolumeCode.end(), code.begin() + 7);
+    code[8] = 0xf0001f30u; // image_load 2d_msaa
+    return code;
+}();
+
+// Keep the three-coordinate address and trailing LOD, but bind a 2D image.
+alignas(256) constexpr auto VolumeAddressCode = [] {
+    auto code = Code;
+    for (auto& word : code) {
+        if (word == 0xf0900f28u) word = 0xf0900f10u;
+        if (word == 0xf0041f28u) word = 0xf0041f10u;
+    }
+    return code;
+}();
+
+alignas(256) constexpr auto VolumeSampleCode = [] {
+    std::array<std::uint32_t, 41> code{};
+    std::copy_n(VolumeAddressCode.begin(), 40, code.begin());
+    code.back() = 0xbf810000u;
+    return code;
+}();
+
 alignas(256) constexpr std::array<std::uint32_t, 11> NarrowCode{
     0x34020087, 0xe0301040, 0x80001001, 0xe0301044, 0x80001101, 0xbf8c3f70, 0xf0900f00, 0x00610c10,
     0xe0701070, 0x80000c01, 0xbf810000,
@@ -166,10 +193,11 @@ std::array<std::uint32_t, 4> SamplerDescriptor() {
     return {0u, 0xfffu << 12u, 1u << 26u, 0u};
 }
 
-void Run(AgcDriver::VulkanDevice& device, std::span<const std::uint32_t> code, const std::array<std::uint32_t, 8>& texture) {
+void Run(AgcDriver::VulkanDevice& device, std::span<const std::uint32_t> code, const std::array<std::uint32_t, 8>& texture, bool unnormalized = false) {
     std::vector<std::uint32_t> userData(16, 0u);
     const auto buffer = BufferDescriptor(Buffer.data(), static_cast<std::uint32_t>(Buffer.size() * 4u));
-    const auto sampler = SamplerDescriptor();
+    auto sampler = SamplerDescriptor();
+    if (unnormalized) sampler[0] = 0x8092u;
     std::copy(buffer.begin(), buffer.end(), userData.begin());
     std::copy(texture.begin(), texture.end(), userData.begin() + 4);
     std::copy(sampler.begin(), sampler.end(), userData.begin() + 12);
@@ -187,8 +215,8 @@ void Run(AgcDriver::VulkanDevice& device, std::span<const std::uint32_t> code, c
     device.WaitIdle();
 }
 
-void Check() {
-    constexpr std::array<const char*, 4> names{"image_sample_l 2d_array", "image_load_mip 2d_array", "image_sample_l 2d", "image_load_mip 2d"};
+void Check(bool volumeAddress = false) {
+    const std::array<const char*, 4> names{volumeAddress ? "image_sample_l 3d" : "image_sample_l 2d_array", volumeAddress ? "image_load_mip 3d" : "image_load_mip 2d_array", "image_sample_l 2d", "image_load_mip 2d"};
     constexpr std::array<std::uint32_t, 4> results{ArrayResult, ArrayResult + 4u, PlainResult, PlainResult + 4u};
     for (std::uint32_t tid = 0; tid < Threads; ++tid) {
         const auto sample = SampleOf(tid);
@@ -232,9 +260,56 @@ int main() {
         FillTexture();
         Run(*device, Code, TextureDescriptor(Texels.data()));
         Check();
+        FillInput();
+        for (std::uint32_t tid = 0; tid < Threads; ++tid) {
+            Buffer[tid * Words + ArrayInput + 2u] = Bits(123.25f);
+            Buffer[tid * Words + ArrayInput + 6u] = 99u;
+        }
+        Run(*device, VolumeAddressCode, TextureDescriptor(Texels.data()));
+        Check(true);
         FillVolume();
         Run(*device, VolumeCode, VolumeDescriptor());
         CheckVolume();
+        FillInput();
+        for (std::uint32_t tid = 0; tid < Threads; ++tid) Buffer[tid * Words + PlainInput + 5] = 11u;
+        Run(*device, MsaaAddressCode, TextureDescriptor(Texels.data()));
+        for (std::uint32_t tid = 0; tid < Threads; ++tid) {
+            const auto sample = SampleOf(tid);
+            const std::array<std::uint32_t, 4> expected{0, sample.x >> sample.level, sample.y >> sample.level, 255};
+            for (std::uint32_t component = 0; component < 4; ++component) {
+                const auto value = std::bit_cast<float>(Buffer[tid * Words + PlainResult + 4 + component]) * 255.0f;
+                Require(std::lround(value) == expected[component], "MSAA address on 2D image did not load the base-level texel");
+            }
+        }
+        // A zero-swizzled volume sample returns constants even when its sampler
+        // requests pixel coordinates, without using a native unnormalized 3D view.
+        auto zeroVolume = VolumeDescriptor();
+        zeroVolume[3] &= ~0xfffu;
+        FillInput();
+        Run(*device, VolumeSampleCode, zeroVolume, true);
+        for (std::uint32_t tid = 0; tid < Threads; ++tid) {
+            for (std::uint32_t component = 0; component < 4; ++component) {
+                Require(Buffer[tid * Words + ArrayResult + component] == Bits(0.0f), "zero-swizzled volume sample did not return zero");
+            }
+        }
+        // Ordinary volume sampling must still read texels after the zero case.
+        FillInput();
+        Run(*device, VolumeSampleCode, VolumeDescriptor());
+        for (std::uint32_t tid = 0; tid < Threads; ++tid) {
+            const auto sample = SampleOf(tid);
+            const std::array<std::uint32_t, 4> expected{VolumeSliceMarker(0), sample.x, sample.y, 255u};
+            for (std::uint32_t component = 0; component < 4; ++component) {
+                const auto value = std::bit_cast<float>(Buffer[tid * Words + ArrayResult + component]) * 255.0f;
+                Require(std::lround(value) == expected[component], "ordinary volume sample selected the constant mode");
+            }
+        }
+        std::string refusal;
+        try {
+            Run(*device, VolumeSampleCode, VolumeDescriptor(), true);
+        } catch (const std::exception& error) {
+            refusal = error.what();
+        }
+        Require(refusal.find("unnormalized guest sampler samples") != std::string::npos, "nonconstant unnormalized volume sampling must remain guarded");
         RequireRefused(*device);
         std::puts("image address dimension tests passed");
         return 0;

@@ -51,6 +51,15 @@ alignas(256) constexpr std::array<std::uint32_t, 22> GradientCode{
 
 constexpr std::array<const char*, 3> Instructions{"image_sample_lz", "image_sample_l 2.7", "image_sample"};
 
+alignas(256) constexpr std::array<std::uint32_t, 45> OffsetCode{
+    0x34020086, 0xe0301008, 0x80000201, 0xe0301000, 0x80000301, 0xe0301004, 0x80000401, 0xbf8c3f70,
+    0x7e0a02ff, 0x402ccccd, 0x7e2802ff, 0x0000023d, 0xf0dc0f08, 0x00610802, 0xf0d00f08, 0x00610c02,
+    0xf0dc0f0a, 0x00611014, 0x00000403, 0xbf8c3f70, 0xe0701010, 0x80000801, 0xe0701014, 0x80000901,
+    0xe0701018, 0x80000a01, 0xe070101c, 0x80000b01, 0xe0701020, 0x80000c01, 0xe0701024, 0x80000d01,
+    0xe0701028, 0x80000e01, 0xe070102c, 0x80000f01, 0xe0701030, 0x80001001, 0xe0701034, 0x80001101,
+    0xe0701038, 0x80001201, 0xe070103c, 0x80001301, 0xbf810000,
+};
+
 struct SamplerCase {
     const char* name;
     std::array<std::uint32_t, 4> words;
@@ -69,6 +78,8 @@ constexpr std::array<SamplerCase, 5> Samplers{{
 struct Coordinate {
     float u;
     float v;
+    std::int32_t du = 0;
+    std::int32_t dv = 0;
 };
 
 std::int32_t LevelWidth(std::uint32_t level) {
@@ -154,6 +165,7 @@ Samples Run(AgcDriver::VulkanDevice& device, const std::array<std::uint32_t, 8>&
             const auto coordinate = first + lane < coordinates.size() ? coordinates[first + lane] : Coordinate{0.5f, 0.5f};
             Buffer[lane * Words] = std::bit_cast<std::uint32_t>(coordinate.u);
             Buffer[lane * Words + 1u] = std::bit_cast<std::uint32_t>(coordinate.v);
+            Buffer[lane * Words + 2u] = 0xffffc0c0u | (static_cast<std::uint32_t>(coordinate.du) & 0x3fu) | ((static_cast<std::uint32_t>(coordinate.dv) & 0x3fu) << 8u);
         }
         std::vector<std::uint32_t> userData(16, 0u);
         const auto buffer = BufferDescriptor(Buffer.data(), static_cast<std::uint32_t>(Buffer.size() * 4u));
@@ -231,7 +243,7 @@ void ExpectFailure(AgcDriver::VulkanDevice& device, const std::array<std::uint32
 
 }
 
-int main() {
+int main(int argc, char** argv) {
     try {
         const auto device = OpenVulkanTestDevice();
         if (!device) return VulkanTestSkipped;
@@ -244,6 +256,11 @@ int main() {
         const auto chain = TextureDescriptor(MultiLevel.data(), StorageLevels - 1u, StorageLevels - 1u);
         auto fromLevelOne = chain;
         fromLevelOne[3] |= 1u << 12u;
+        if (argc == 2 && std::string_view(argv[1]) == "--chain-only") {
+            Check(Samplers[0], 0u, "isolated 4-level view", coordinates, Run(*device, chain, Samplers[0].words, coordinates));
+            std::puts("isolated unnormalized mip chain passed");
+            return 0;
+        }
         for (const auto& sampler : Samplers) {
             const auto singleSamples = Run(*device, single, sampler.words, coordinates);
             Check(sampler, 0u, "1-level image", coordinates, singleSamples);
@@ -260,6 +277,32 @@ int main() {
             Check(sampler, 0u, "4-level view", coordinates, chainSamples);
             Require(chainSamples == singleSamples, std::string(sampler.name) + ": a 4-level view does not sample its base level like a 1-level image");
             Check(sampler, 1u, "3-level view starting at mip 1", levelOneCoordinates, Run(*device, fromLevelOne, sampler.words, levelOneCoordinates));
+            auto offsetCoordinates = coordinates;
+            auto shifted = coordinates;
+            auto literalShifted = coordinates;
+            constexpr std::array<std::int32_t, 7> offsets{-32, -5, -1, 0, 1, 3, 31};
+            for (std::size_t index = 0; index < coordinates.size(); ++index) {
+                auto& coordinate = offsetCoordinates[index];
+                coordinate.du = offsets[index % offsets.size()];
+                coordinate.dv = offsets[(index + 3u) % offsets.size()];
+                shifted[index].u += coordinate.du;
+                shifted[index].v += coordinate.dv;
+                literalShifted[index].u -= 3.0f;
+                literalShifted[index].v += 2.0f;
+            }
+            const auto offsetSamples = Run(*device, multi, sampler.words, offsetCoordinates, OffsetCode);
+            const auto shiftedSamples = Run(*device, multi, sampler.words, shifted);
+            const auto literalSamples = Run(*device, multi, sampler.words, literalShifted);
+            for (std::size_t index = 0; index < coordinates.size(); ++index) {
+                for (std::uint32_t component = 0; component < Results; ++component) {
+                    const auto expected = component < 8u ? shiftedSamples[index][component] : literalSamples[index][component];
+                    Require(offsetSamples[index][component] == expected, std::string(sampler.name) + ": signed texel offset disagrees with shifted coordinates");
+                }
+            }
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--native-only") {
+            std::puts("native unnormalized sampling and offset tests passed");
+            return 0;
         }
         ExpectFailure(*device, single, {0x00008092u, 0x00fff000u, 0x05100000u, 0u}, "different minification", "unequal minification and magnification filters");
         ExpectFailure(*device, single, {0x00008090u, 0x00fff000u, 0x05500000u, 0u}, "clamp mode 0", "wrap on X");

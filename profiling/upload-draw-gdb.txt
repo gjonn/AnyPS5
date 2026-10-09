@@ -1,0 +1,25 @@
+[New Thread 38384.0xd2b0]
+[New Thread 38384.0x3d64]
+[New Thread 38384.0xbf3c]
+[time] scheduler tick raised to 0.5 ms (was 0.50 ms, now 0.50 ms, timed waits fine)
+[New Thread 38384.0xbc9c]
+[New Thread 38384.0xccb4]
+[Thread 38384.0xbc9c exited with code 0]
+[New Thread 38384.0xb874]
+[New Thread 38384.0xa264]
+[New Thread 38384.0xc460]
+[New Thread 38384.0xeb0]
+[New Thread 38384.0x3f04]
+[New Thread 38384.0x4e3c]
+[New Thread 38384.0xb074]
+[write-watch] host imports stay watched (APS5_WRITE_WATCH_IMPORTS=watch)
+[write-watch] host imports are compared on Windows because driver writes can arrive after the import window
+[New Thread 38384.0xa24c]
+[New Thread 38384.0xa290]
+
+Thread 14 received signal SIGSEGV, Segmentation fault.
+[Switching to Thread 38384.0xa24c]
+0x00007ffc05aa2225 in std::array<AgcDriver::Graphics::(anonymous namespace)::DrawInputMemoEntry, 64ull>::~array() () from C:\repos\AnyPS5-pr639\build\core\libs\libs\unpatched\libSceAgcDriver.prx
+#0  0x00007ffc05aa2225 in std::array<AgcDriver::Graphics::(anonymous namespace)::DrawInputMemoEntry, 64ull>::~array() () from C:\repos\AnyPS5-pr639\build\core\libs\libs\unpatched\libSceAgcDriver.prx
+#1  0x0000000003a20080 in ?? ()
+#2  0x0000000000000000 in ?? ()

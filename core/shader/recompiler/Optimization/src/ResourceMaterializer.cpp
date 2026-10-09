@@ -637,10 +637,25 @@ std::vector<ImageResource> ResourceMaterializer::RuntimeImageModes(const ImageRe
         mode.depthBits = depth;
         mode.depthUnorm16 = unorm16;
         mode.cube = false;
-        mode.mipCount = mode.mipMode == ImageMipMode::DynamicStorage ? RuntimeAbi::StorageHeapCapacity : 1u;
+        mode.mipCount = mode.mipMode == ImageMipMode::DynamicStorage ? RuntimeAbi::StorageMipCapacity : 1u;
         mode.shaderSwizzle = ShaderImageIdentitySwizzle;
         if (conversion == IrBufferFormat::Format11_11_10UNorm || conversion == IrBufferFormat::Format10_11_11Float) mode.shaderSwizzle = 0x2acu;
         modes.push_back(mode);
+        if (!storage && image.dimension == RdnaImageDimension::Dim2DMsaa) {
+            // A regular 2D descriptor selects a base-level fetch; the instruction's
+            // extra sample-index component is unused for that view.
+            auto singleSample = mode;
+            singleSample.dimension = RdnaImageDimension::Dim2D;
+            modes.push_back(singleSample);
+        }
+        if (image.dimension == RdnaImageDimension::Dim3D) {
+            // The instruction supplies XYZ (and any trailing LOD), but the bound
+            // descriptor may be a 2D placeholder. Keep the instruction's address
+            // layout and let the selected view consume only XY.
+            auto planar = mode;
+            planar.dimension = RdnaImageDimension::Dim2D;
+            modes.push_back(planar);
+        }
         if (image.dimension == RdnaImageDimension::Dim2D && image.fmaskCompatible && !depth && packed == IrBufferFormat::Invalid) {
             auto volume = mode;
             volume.dimension = RdnaImageDimension::Dim3D;
@@ -733,6 +748,12 @@ std::vector<ImageResource> ResourceMaterializer::RuntimeImageModes(const ImageRe
         mode.packedFormat = IrBufferFormat::Invalid;
         mode.shaderSwizzle = ShaderImageIdentitySwizzle;
         modes.push_back(mode);
+        if (image.dimension == RdnaImageDimension::Dim2DArray) {
+            // Array-address comparison instructions can bind a non-array
+            // placeholder, just as the native comparison modes above can.
+            mode.dimension = RdnaImageDimension::Dim2D;
+            modes.push_back(mode);
+        }
     }
     if (image.srgbDecodeFormats != 0u && image.srgbDecodeCompatible && !storage && !image.depthCompare && !image.packed) {
         const auto count = modes.size();
@@ -742,6 +763,16 @@ std::vector<ImageResource> ResourceMaterializer::RuntimeImageModes(const ImageRe
             auto mode = base;
             mode.srgbDecode = true;
             modes.push_back(mode);
+        }
+    }
+    if (!storage && !image.depthCompare && !image.packed && image.indirectRoot == ImageResource::NoIndirectImage) {
+        const auto count = modes.size();
+        for (std::size_t index = 0; index < count; ++index) {
+            const auto& base = modes[index];
+            if (base.dimension != RdnaImageDimension::Dim3D || base.numericClass != IrTextureNumericClass::Float || base.conversionFormat != IrBufferFormat::Invalid || base.packedFormat != IrBufferFormat::Invalid || base.depthBits || base.srgbDecode) continue;
+            auto zero = base;
+            zero.constantSwizzle = 1u;
+            modes.push_back(zero);
         }
     }
     if (modes.empty()) throw std::runtime_error("image instruction has no supported runtime modes");
@@ -767,9 +798,19 @@ std::uint32_t ResourceMaterializer::RuntimeImageMode(const ImageResource& image,
             if (!exact) throw std::runtime_error(storage ? "runtime packed image bits are not reproducible through the view" : "runtime packed image bits are not recoverable from the view");
         }
     }
-    if (decoded.mipCount > (image.mipMode == ImageMipMode::DynamicStorage ? RuntimeAbi::StorageHeapCapacity : 1u)) throw std::runtime_error("runtime storage image mip capacity exceeded");
+    if (decoded.mipCount > (image.mipMode == ImageMipMode::DynamicStorage ? RuntimeAbi::StorageMipCapacity : 1u)) throw std::runtime_error("runtime storage image mip capacity exceeded");
+    // An all-zero component selection needs no texture sampling. Select its
+    // explicit mode before the ordinary view, including for pixel-coordinate
+    // samplers that Vulkan cannot use with a 3D image.
+    if (decoded.constantSwizzle == 1u) {
+        for (std::uint32_t index = 0u; index < modes.size(); ++index) {
+            const auto& mode = modes[index];
+            if (mode.constantSwizzle == 1u && mode.dimension == decoded.dimension && mode.numericClass == decoded.numericClass) return index;
+        }
+    }
     for (std::uint32_t index = 0u; index < modes.size(); ++index) {
         const auto& mode = modes[index];
+        if (mode.constantSwizzle != 0u) continue;
         if (((mode.emulatedCompare & EmulatedCompare::Enabled) != 0u) != emulated) continue;
         if (decoded.fmask) {
             if (mode.packedFormat == IrBufferFormat::Fmask8_S2_F1) return index;
@@ -778,7 +819,7 @@ std::uint32_t ResourceMaterializer::RuntimeImageMode(const ImageResource& image,
         if (mode.numericClass == decoded.numericClass && mode.dimension == decoded.dimension && mode.conversionFormat == decoded.conversionFormat && mode.packedFormat == decoded.packedFormat && mode.cube == decoded.cube && mode.depthBits == decoded.depthBits && mode.depthUnorm16 == decoded.depthUnorm16 && mode.srgbDecode == decoded.srgbDecode) return index;
     }
     if (image.dimension == RdnaImageDimension::Dim1D && decoded.dimension != RdnaImageDimension::Dim1D) throw std::runtime_error("image address has too few coordinate components (descriptor dimension " + std::to_string(static_cast<int>(decoded.dimension)) + " numeric " + std::to_string(static_cast<int>(decoded.numericClass)) + " conversion " + std::to_string(static_cast<int>(decoded.conversionFormat)) + " packed " + std::to_string(static_cast<int>(decoded.packedFormat)) + " cube " + std::to_string(decoded.cube) + " depthBits " + std::to_string(decoded.depthBits) + " srgb " + std::to_string(decoded.srgbDecode) + " emulated " + std::to_string(emulated) + " modes " + std::to_string(modes.size()) + " pc " + std::to_string(image.firstUsePc) + " read " + std::to_string(image.read) + " written " + std::to_string(image.written) + " mip " + std::to_string(static_cast<int>(image.mipMode)) + " class " + std::to_string(static_cast<int>(image.resourceClass)) + " filter " + std::to_string(image.emulatedFilter) + ")");
-    throw std::runtime_error("image descriptor is incompatible with the static runtime image interface");
+    throw std::runtime_error("image descriptor is incompatible with the static runtime image interface: dimension " + std::to_string(static_cast<int>(decoded.dimension)) + " numeric " + std::to_string(static_cast<int>(decoded.numericClass)) + " conversion " + std::to_string(static_cast<int>(decoded.conversionFormat)) + " packed " + std::to_string(static_cast<int>(decoded.packedFormat)) + " cube " + std::to_string(decoded.cube) + " depth " + std::to_string(decoded.depthBits) + " srgb " + std::to_string(decoded.srgbDecode) + " modes " + std::to_string(modes.size()));
 }
 
 std::uint32_t ResourceMaterializer::EmulatedCompareState(const ShaderInfo& info, const ResourceSnapshot& snapshot, std::uint32_t index) {
@@ -815,7 +856,7 @@ void ResourceMaterializer::ApplyStaticInterface(IrProgram& program, bool nativeS
         image.srgbDecodeFormats = resources.srgbDecodeFormats;
         if (image.indirectRoot != ImageResource::NoIndirectImage) throw std::runtime_error("static image interface was already expanded");
         image.numericClass = image.atomic ? IrTextureNumericClass::Uint : IrTextureNumericClass::Float;
-        image.mipCount = image.mipMode == ImageMipMode::DynamicStorage ? RuntimeAbi::StorageHeapCapacity : 1u;
+        image.mipCount = image.mipMode == ImageMipMode::DynamicStorage ? RuntimeAbi::StorageMipCapacity : 1u;
         if (resources.descriptorSources.at(image.source).indirectImage.has_value()) {
             if (images.size() + slots - 1u > ShaderInfo::MaxImages) throw std::runtime_error("static bindless image capacity exceeded");
             image.indirectRoot = index;

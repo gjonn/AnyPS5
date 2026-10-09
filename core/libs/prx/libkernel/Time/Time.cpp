@@ -1,3 +1,4 @@
+#include <ProfileOutput.hpp>
 #include <cmath>
 #include "prx/libkernel/Time/include/Time.hpp"
 #include "prx/libkernel/Time/include/TimedWait.hpp"
@@ -188,7 +189,7 @@ void KernelTraceWait_nid_postfix(const char* kind, const void* caller, std::uint
     static const bool timeline = std::getenv("APS5_TRACE_WAIT_TIMELINE") != nullptr;
     if (timeline && waitedNanos >= 5000000ull) {
         const auto image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
-        std::fprintf(stderr, "[wt] %.1f tid %lu %s exe+0x%llx waited %.1f ms%s\n", std::fmod(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(), 1.0e7), GetCurrentThreadId(), kind, static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(caller) - image), waitedNanos / 1e6, timedOut ? " (timeout)" : "");
+        Diagnostics::ProfilePrint_nid_no_patch("[wt] %.1f tid %lu %s exe+0x%llx waited %.1f ms%s\n", std::fmod(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(), 1.0e7), GetCurrentThreadId(), kind, static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(caller) - image), waitedNanos / 1e6, timedOut ? " (timeout)" : "");
     }
     static const bool enabled = std::getenv("APS5_TRACE_WAITS") != nullptr;
     if (!enabled) return;

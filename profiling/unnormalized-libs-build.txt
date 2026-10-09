@@ -1,0 +1,9 @@
+[0/2] Re-checking globbed directories...
+[1/6] Linking CXX shared library core\libs\libs\unpatched\libSceAgc.prx
+[2/6] Linking CXX shared library core\libs\libs\unpatched\libSceVideoOut.prx
+[3/6] Patching NIDs for libSceAgc
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAgc.prx
+[4/6] Patching NIDs for libSceVideoOut
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceVideoOut.prx
+[5/6] Patching NIDs for libSceAgcDriver
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAgcDriver.prx

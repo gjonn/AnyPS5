@@ -1,0 +1,12 @@
+[time] scheduler tick raised to 0.5 ms (was 0.50 ms, now 0.50 ms, timed waits fine)
+[write-watch] host imports stay watched (APS5_WRITE_WATCH_IMPORTS=watch)
+[write-watch] host imports are compared on Windows because driver writes can arrive after the import window
+host imports stay watched
+[src/Texture.cpp:711 StorageTexture] StorageTexture address=0x200000000 128x128 mips=1 mip=0 layers=0 base=0 dim=1 tile=0 format=56 vk=37
+[guestmem] read 0 calls 0 MiB 0.0 s compare 0 calls 0 MiB 0.0 s write 0 calls 0 MiB 0.0 s write-changed 0 calls 0 MiB 0.0 s collect 0 calls 0 MiB 0.0 s verify 0 calls 0 MiB 0.0 s query 1 calls 0 MiB 0.0 s collect-memo hits 0, collect epochs 0 collect-dirty 0 tracker waits 0 / 7 | arena 0x200000000+0xfa00000000 image 0x7ff66b470000+0x59000 forgets 0 (0 MiB) | read callers: | write callers: | read sites:
+[buffers] descriptor elements bound: 0 total, 0 written, 0 read-only; 0 pending-write notes skipped
+[src/Texture.cpp:711 StorageTexture] StorageTexture address=0x200010000 128x128 mips=1 mip=0 layers=0 base=0 dim=1 tile=0 format=56 vk=37
+[rescache] revalidate 1 calls 0.0 ms: fast 1, full 0, failed 0; fast-fail by reason:; full walks: T1 refreshed 0 (0 storage images, 0 view sources, 0 views served by their own pending source, 0 overlaps left by the refresh accepted), full by reason:, T1 fallback by reason:, proofs verified 0; fast-fail pending image: own 0 (the query excepts the own object), foreign 0, snapshot 0, T1 eligible 0; keys proven: 0 sampled, 0 storage; epoch gate: 0 registry scans skipped, 0 import loops skipped; lookup memo (APS5_LOOKUP_MEMO, cumulative): 0 hits, 0 misses
+[gpu] storage image 0x200000000: guest memory changed while GPU results were pending; keeping the CPU's blocks
+[gpu] storage image 0x200010000: guest memory changed while GPU results were pending; keeping the CPU's blocks
+Alternating render-pass GPU readback passed, 0 leading draw barriers merged

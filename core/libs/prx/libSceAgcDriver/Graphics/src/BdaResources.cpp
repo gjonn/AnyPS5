@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Graphics/include/BdaResources.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/PerformanceControls.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
 #include <algorithm>
 #include <atomic>
@@ -10,6 +11,7 @@
 #include <list>
 #include <mutex>
 #include <sstream>
+#include <string_view>
 
 namespace AgcDriver::Graphics {
 
@@ -38,6 +40,7 @@ struct TableEntry {
     std::vector<ShaderRecompiler::BdaAbi::Range> ranges;
     std::weak_ptr<Buffer> buffer;
     std::uint64_t spaceSerial = 0;
+    bool deviceLocal = false;
 };
 
 struct TableCache {
@@ -50,6 +53,23 @@ struct TableCache {
 };
 
 bool sameRanges(const std::vector<ShaderRecompiler::BdaAbi::Range>& left, const std::vector<ShaderRecompiler::BdaAbi::Range>& right);
+
+std::shared_ptr<Buffer> makeTableBuffer(const Context& context, std::size_t bytes, bool local) {
+    if (local) {
+        try {
+            auto buffer = std::make_shared<Buffer>(context, bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            static std::once_flag reported;
+            std::call_once(reported, [] { std::fprintf(stderr, "[bda-table] using mapped device-local memory for read-only address tables\n"); });
+            return buffer;
+        } catch (const std::runtime_error& error) {
+            if (std::string_view(error.what()) != "AGC graphics: required Vulkan memory type is unavailable") throw;
+            static std::once_flag reported;
+            std::call_once(reported, [] { std::fprintf(stderr, "[bda-table] mapped device-local memory unavailable; using host memory\n"); });
+        }
+    }
+    return std::make_shared<Buffer>(context, bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+}
 
 // APS5_PROFILE_DRAW: why the most recently used entry did not serve this build (see
 // TableCacheStats). Under the cache mutex.
@@ -128,6 +148,7 @@ BdaResources::BdaResources(const Context& context) {
 }
 
 BdaResources::BdaResources(const Context& context, const GuestBufferMemory& memory) : BdaResources(context) {
+    const bool deviceLocal = (LivePerformanceControls().Get() & PerformanceControls::BdaTableDeviceLocal) != 0;
     const auto cached = memory.CachedAddressTable();
     std::vector<ShaderRecompiler::BdaAbi::Range> built;
     if (!cached.has_value()) built = memory.AddressRanges();
@@ -148,7 +169,7 @@ BdaResources::BdaResources(const Context& context, const GuestBufferMemory& memo
         }
         if (serial != 0) {
             for (auto it = cache.entries.begin(); it != cache.entries.end(); ++it) {
-                if (it->spaceSerial != serial) continue;
+                if (it->spaceSerial != serial || it->deviceLocal != deviceLocal) continue;
                 if (auto shared = it->buffer.lock(); shared != nullptr) {
                     ++cache.hits;
                     ++cache.classes.spaceTables;
@@ -166,7 +187,7 @@ BdaResources::BdaResources(const Context& context, const GuestBufferMemory& memo
             // Compare the hash before taking a strong reference: locking a non-matching entry's
             // buffer could make this thread its last owner (a concurrent reap releasing it) and
             // run the pool release under the cache mutex; expired() takes no reference.
-            if (it->hash != hash) {
+            if (it->hash != hash || it->deviceLocal != deviceLocal) {
                 if (it->buffer.expired()) {
                     it = cache.entries.erase(it);
                 } else {
@@ -192,7 +213,7 @@ BdaResources::BdaResources(const Context& context, const GuestBufferMemory& memo
             ++it;
         }
     }
-    table = std::make_shared<Buffer>(context, tableBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    table = makeTableBuffer(context, tableBytes, deviceLocal);
     const ShaderRecompiler::BdaAbi::Header header{ShaderRecompiler::BdaAbi::Version, static_cast<std::uint32_t>(ranges.size()), sizeof(ShaderRecompiler::BdaAbi::Range), 0};
     std::memcpy(table->Bytes().data(), &header, sizeof(header));
     if (!ranges.empty()) std::memcpy(table->Bytes().data() + sizeof(header), ranges.data(), ranges.size() * sizeof(ranges.front()));
@@ -203,7 +224,7 @@ BdaResources::BdaResources(const Context& context, const GuestBufferMemory& memo
             cache.entries.clear();
             cache.device = context.device;
         }
-        cache.entries.push_front({hash, cached.has_value() ? ranges : std::move(built), table, serial});
+        cache.entries.push_front({hash, cached.has_value() ? ranges : std::move(built), table, serial, deviceLocal});
         while (cache.entries.size() > tableCacheEntries()) cache.entries.pop_back();
     }
 }

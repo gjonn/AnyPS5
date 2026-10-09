@@ -198,7 +198,7 @@ CompiledVariant sampleVariant() {
     image.indirectResources = {1, 2, 3};
     info.info.images = {image};
     ResourceMaterializer::PrepareImageModes(info.info);
-    info.info.samplers = {{7, 0x10, 3, true, false, SamplerUseExplicitLod | SamplerUseGather}};
+    info.info.samplers = {{7, 0x10, 3, true, false, false, SamplerUseExplicitLod | SamplerUseGather}};
     info.info.sampledPairs = {{0, 0, 0x10}};
     StageInput input{};
     input.kind = StageInputKind::GlobalInvocationId;
@@ -896,6 +896,10 @@ void verifyBuiltinSpecialization() {
         require(count != 0u && count <= specialized.size() - cursor, "builtin specialization produced a truncated instruction");
         const auto op = static_cast<spv::Op>(specialized[cursor] & 0xffffu);
         require(op != spv::OpSwitch && op != spv::OpBranchConditional && op != spv::OpPhi && op != spv::OpVectorExtractDynamic, "builtin specialization retained constant control flow or dynamic exports");
+        if (op == spv::OpConstant || op == spv::OpConstantTrue || op == spv::OpConstantFalse) {
+            const auto id = specialized[cursor + 2u];
+            require(id != 12u && id != 19u, "specialization retained a dead folded control-flow constant");
+        }
         if (op == spv::OpStore && specialized[cursor + 1u] == 31u) identity = specialized[cursor + 2u] == 30u;
         if (op == spv::OpStore && specialized[cursor + 1u] == 34u) phiValue = specialized[cursor + 2u];
         cursor += count;
@@ -983,6 +987,12 @@ void verifyDefaultDirectory(const char* self) {
 
 int main(int argc, char** argv) {
     try {
+        if (argc == 2 && std::string_view(argv[1]) == "--specialization-only") {
+            verifyBuiltinSpecialization();
+            verifySpecializationLiveness();
+            std::cout << "shader specialization tests passed\n";
+            return 0;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--load") return runLoadingProcess();
         if (argc == 2 && std::string_view(argv[1]) == "--no-failure-memo") return runWithoutFailureMemo();
         const auto directory = std::filesystem::temp_directory_path() / ("aps5-shader-disk-cache-test-" + std::to_string(std::random_device{}()));

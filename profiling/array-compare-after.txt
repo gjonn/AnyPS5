@@ -1,0 +1,26 @@
+[time] scheduler tick raised to 0.5 ms (was 0.50 ms, now 0.50 ms, timed waits fine)
+[src/VulkanDevice.cpp:583 VulkanDevice] VulkanDevice constructor window=0000000000000000
+[src/VulkanDevice.cpp:592 VulkanDevice] Vulkan loader loaded library=00007ffc5b900000
+[src/VulkanDevice.cpp:626 VulkanDevice] Vulkan instance created instance=00000253bb1b9070
+[src/VulkanDevice.cpp:637 VulkanDevice] Physical device count=2
+[src/VulkanDevice.cpp:670 VulkanDevice] Physical device candidate=00000253fd67a630 name=NVIDIA GeForce RTX 5090 Laptop GPU api=0x40415f type=2
+[src/VulkanDevice.cpp:670 VulkanDevice] Physical device candidate=00000253fd67a660 name=Intel(R) Graphics api=0x404148 type=1
+[src/VulkanDevice.cpp:717 VulkanDevice] Physical device selected physical=00000253fd67a630 queueFamily=0
+[src/VulkanDevice.cpp:730 VulkanDevice] Selected GPU name=NVIDIA GeForce RTX 5090 Laptop GPU vendor=0x10de device=0x2c58 subgroup=32
+[src/VulkanDevice.cpp:732 VulkanDevice] Memory heap 0 size=24137.0 MiB flags=0x1
+[src/VulkanDevice.cpp:732 VulkanDevice] Memory heap 1 size=32478.7 MiB flags=0x0
+[src/VulkanDevice.cpp:733 VulkanDevice] Memory type 0 heap=1 flags=0x0
+[src/VulkanDevice.cpp:733 VulkanDevice] Memory type 1 heap=0 flags=0x1
+[src/VulkanDevice.cpp:733 VulkanDevice] Memory type 2 heap=1 flags=0x6
+[src/VulkanDevice.cpp:733 VulkanDevice] Memory type 3 heap=1 flags=0xe
+[src/VulkanDevice.cpp:733 VulkanDevice] Memory type 4 heap=0 flags=0x7
+[src/VulkanDevice.cpp:784 VulkanDevice] Shader clock driver=4 narrowSubgroupClock=0
+[src/VulkanDevice.cpp:950 VulkanDevice] Vulkan features tessellationAvailable=1 mesh=1 depthClip=1 depthRangeUnrestricted=1
+[src/VulkanDevice.cpp:1111 VulkanDevice] Compute wave32 programs run on subgroups of 32
+[src/VulkanDevice.cpp:1156 VulkanDevice] Vulkan device ready device=00000253bd9c00d0 queue=00000253bd8e14d0 family=0
+[write-watch] host imports are compared on Windows because driver writes can arrive after the import window
+[pipeline-cache] loaded 275.2 KiB from C:\repos\AnyPS5-pr639\build\tests\shader_cache\vk-pipelines-10de-2c58-9a170000-9374c137417b3d73adcf90d3a502d334.bin
+[src/Texture.cpp:248 Texture] Texture address=0x7ff6fe7e9000 2x2 mips=1 layers=1 dim=1 tile=0 format=56 vk=37 element=4
+[src/Texture.cpp:250 Texture]   mip 2x2 tiled=0x0+0x200 linear=0x0+0x200 blocksPerRow=64 pitch=256 tail=0
+[pipeline-cache] saved 297.6 KiB to C:\repos\AnyPS5-pr639\build\tests\shader_cache\vk-pipelines-10de-2c58-9a170000-9374c137417b3d73adcf90d3a502d334.bin in 1.0 ms (teardown)
+array-address color comparison tests passed

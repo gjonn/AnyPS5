@@ -9,7 +9,7 @@
 
 namespace ShaderRecompiler::RuntimeAbi {
 
-inline constexpr std::uint32_t Version = 10u;
+inline constexpr std::uint32_t Version = 11u;
 inline constexpr std::uint32_t DescriptorSet = 0u;
 inline constexpr std::uint32_t StageCount = 4u;
 inline constexpr std::uint32_t PushConstantDwords = 32u;
@@ -35,7 +35,9 @@ inline constexpr std::uint32_t UserDataCapacity = 128u;
 inline constexpr std::uint32_t BufferCapacity = 128u;
 inline constexpr std::uint32_t ImageCapacity = 256u;
 inline constexpr std::uint32_t SampledHeapCapacity = 64u;
-inline constexpr std::uint32_t StorageHeapCapacity = 16u;
+inline constexpr std::uint32_t StorageHeapCapacity = 128u;
+// Mip fields are four bits; heap capacity covers multiple images.
+inline constexpr std::uint32_t StorageMipCapacity = 16u;
 inline constexpr std::uint32_t SamplerHeapCapacity = 32u;
 
 struct ResourceMetadata {

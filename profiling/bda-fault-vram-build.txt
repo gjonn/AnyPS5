@@ -1,0 +1,18 @@
+[0/2] Re-checking globbed directories...
+[1/17] Hashing the shader recompiler sources for the shader disk cache
+[2/15] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Graphics/src/BdaResources.cpp.obj
+[3/15] Linking CXX shared library core\libs\libs\unpatched\libSceAgcDriver.prx
+[4/15] Linking CXX shared library core\libs\libs\unpatched\libSceAgc.prx
+[5/15] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/agc_driver_global_store_addtid_tests.dir/tests/execution/GlobalStoreAddtid.cpp.obj
+[6/15] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/agc_driver_flat_store_tests.dir/tests/execution/FlatStore.cpp.obj
+[7/15] Linking CXX shared library core\libs\libs\unpatched\libSceVideoOut.prx
+[8/15] Linking CXX executable tests\agc_driver_global_store_addtid_tests.exe
+[9/15] Patching NIDs for libSceAgc
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAgc.prx
+[10/15] Linking CXX executable tests\agc_driver_flat_store_tests.exe
+[11/15] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/agc_driver_global_atomics_tests.dir/tests/execution/GlobalAtomics.cpp.obj
+[12/15] Patching NIDs for libSceVideoOut
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceVideoOut.prx
+[13/15] Linking CXX executable tests\agc_driver_global_atomics_tests.exe
+[14/15] Patching NIDs for libSceAgcDriver
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAgcDriver.prx

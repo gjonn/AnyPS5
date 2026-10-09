@@ -1,0 +1,59 @@
+[0/2] Re-checking globbed directories...
+[1/58] Hashing the shader recompiler sources for the shader disk cache
+[2/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Diagnostics.cpp.obj
+[3/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/DeviceAccess.cpp.obj
+[4/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Dispatch/DataHitVerification.cpp.obj
+[5/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Dispatch/Dispatch.cpp.obj
+[6/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Dispatch/DispatchCache.cpp.obj
+[7/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Dispatch/DispatchInsert.cpp.obj
+[8/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Dispatch/DispatchCacheStatistics.cpp.obj
+[9/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Dispatch/DispatchLookup.cpp.obj
+[10/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Dispatch/DispatchTiming.cpp.obj
+[11/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Dispatch/IndirectDispatch.cpp.obj
+[12/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Dispatch/VariantValidation.cpp.obj
+[13/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Draw/DrawCache.cpp.obj
+[14/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Draw/DrawCacheStatistics.cpp.obj
+[15/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Draw/DrawCapture.cpp.obj
+[16/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Draw/Draw.cpp.obj
+[17/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Draw/DrawDecode.cpp.obj
+[18/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Draw/DrawLookup.cpp.obj
+[19/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Draw/DrawPrecheck.cpp.obj
+[20/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Draw/DrawRegisterKey.cpp.obj
+[21/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Draw/IndirectDraw.cpp.obj
+[22/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Draw/DrawTiming.cpp.obj
+[23/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/EntryPoints.cpp.obj
+[24/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Memory/BufferCopy.cpp.obj
+[25/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Lifecycle.cpp.obj
+[26/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Memory/CaptureDiagnostics.cpp.obj
+[27/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Memory/BufferFill.cpp.obj
+[28/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Memory/WriteEvidence.cpp.obj
+[29/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Memory/CaptureValidation.cpp.obj
+[30/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Memory/WrittenBuffers.cpp.obj
+[31/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Packets/CommandValidation.cpp.obj
+[32/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Packets/PacketHistory.cpp.obj
+[33/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Packets/PacketFlush.cpp.obj
+[34/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Packets/PacketMemory.cpp.obj
+[35/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Packets/PacketExecution.cpp.obj
+[36/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Packets/PacketTiming.cpp.obj
+[37/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Presentation.cpp.obj
+[38/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Queues/QueueWorker.cpp.obj
+[39/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Queues/WorkerAffinity.cpp.obj
+[40/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Shaders/ShaderDiagnostics.cpp.obj
+[41/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Queues/Submission.cpp.obj
+[42/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Synchronization/DeferredLabels.cpp.obj
+[43/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Synchronization/LabelHistory.cpp.obj
+[44/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Synchronization/SynchronizationStatistics.cpp.obj
+[45/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Synchronization/WaitStatistics.cpp.obj
+[46/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Synchronization/WaitMemory.cpp.obj
+[47/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/libSceAgcDriver.dir/Execution/src/Driver/Shaders/ShaderRegistry.cpp.obj
+[48/56] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/agc_driver_prepared_shaders_tests.dir/tests/execution/PreparedShaders.cpp.obj
+[49/56] Linking CXX shared library core\libs\libs\unpatched\libSceAgcDriver.prx
+[50/56] Linking CXX executable tests\agc_driver_prepared_shaders_tests.exe
+[51/56] Linking CXX shared library core\libs\libs\unpatched\libSceAgc.prx
+[52/56] Linking CXX shared library core\libs\libs\unpatched\libSceVideoOut.prx
+[53/56] Patching NIDs for libSceAgc
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAgc.prx
+[54/56] Patching NIDs for libSceVideoOut
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceVideoOut.prx
+[55/56] Patching NIDs for libSceAgcDriver
+OK: C:/repos/AnyPS5-pr639/build/core/libs/libs/libSceAgcDriver.prx

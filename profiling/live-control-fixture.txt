@@ -1,0 +1,2 @@
+merge_draw_barriers=0
+bda_table_device_local=0

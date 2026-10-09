@@ -142,10 +142,13 @@ void CheckHeaps() {
     Reject([&] { allocate(image, 1u, RuntimeAbi::SamplerHeapCapacity + 1u); }, "metadata capacity");
     image.resourceClass = ImageResourceClass::Storage;
     image.mipMode = ImageMipMode::DynamicStorage;
-    image.mipCount = RuntimeAbi::StorageHeapCapacity;
+    image.mipCount = RuntimeAbi::StorageMipCapacity;
     const auto storage = allocate(image, 1u);
     Require(BindingAllocator{}.FindBinding(storage.layout, DescriptorBindingForImage(image)).resources.size() == image.mipCount, "storage heap did not reserve each mip");
-    Reject([&] { allocate(image, 2u); }, "heap capacity exceeded");
+    const auto storageImages = RuntimeAbi::StorageHeapCapacity / RuntimeAbi::StorageMipCapacity;
+    const auto storageFull = allocate(image, storageImages);
+    Require(BindingAllocator{}.FindBinding(storageFull.layout, DescriptorBindingForImage(image)).resources.size() == RuntimeAbi::StorageHeapCapacity, "storage heap did not reserve all images and mips");
+    Reject([&] { allocate(image, storageImages + 1u); }, "heap capacity exceeded");
     Reject([&] { allocate(image, 0u, RuntimeAbi::SamplerHeapCapacity / 2u + 1u); }, "sampler pairs");
     const std::array dimensions{RdnaImageDimension::Dim1D, RdnaImageDimension::Dim1DArray, RdnaImageDimension::Dim2D, RdnaImageDimension::Dim2DArray, RdnaImageDimension::Dim3D, RdnaImageDimension::Dim2DMsaa, RdnaImageDimension::Dim2DMsaaArray};
     std::set<std::uint32_t> classes;

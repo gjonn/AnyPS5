@@ -257,6 +257,7 @@ public:
         }
         removeDeadComputations();
         orderPhis();
+        removeDeadScalarConstants();
         std::vector<std::uint32_t> words = header;
         bool inserted = false;
         for (const auto& instruction : instructions) {
@@ -272,6 +273,32 @@ public:
     }
 
 private:
+    void removeDeadScalarConstants() {
+        const auto scalarConstant = [](const Instruction& instruction) {
+            const auto op = Opcode(instruction);
+            return op == spv::OpConstant || op == spv::OpConstantTrue || op == spv::OpConstantFalse;
+        };
+        std::set<std::uint32_t> referenced;
+        for (const auto& instruction : instructions) {
+            const auto op = Opcode(instruction);
+            if (instruction.empty() || scalarConstant(instruction) || op == spv::OpName || op == spv::OpDecorate) continue;
+            bool hasResult = false;
+            bool hasType = false;
+            spv::HasResultAndType(op, &hasResult, &hasType);
+            const auto resultIndex = hasResult ? (hasType ? 2u : 1u) : 0u;
+            for (std::size_t index = 1; index < instruction.size(); ++index) {
+                if (index != resultIndex) referenced.insert(instruction[index]);
+            }
+        }
+        for (auto* collection : {&instructions, &constants}) {
+            for (auto& instruction : *collection) {
+                if (!scalarConstant(instruction) || referenced.contains(Result(instruction))) continue;
+                removed.insert(Result(instruction));
+                instruction.clear();
+            }
+        }
+    }
+
     std::optional<std::uint32_t> value(std::uint32_t id) const {
         const auto found = values.find(id);
         return found != values.end() ? std::optional(found->second) : std::nullopt;

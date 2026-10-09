@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -56,6 +57,11 @@ struct RegisteredShaderState {
     Registers userConfig;
 };
 
+struct ShaderControlFlowValidation {
+    std::mutex mutex;
+    std::map<std::size_t, std::exception_ptr> entries;
+};
+
 struct ShaderSnapshot {
     std::uint64_t codeAddress;
     std::uint64_t headerAddress;
@@ -64,10 +70,13 @@ struct ShaderSnapshot {
     std::vector<std::byte> header;
     std::shared_ptr<PreparedShaders> prepared = std::make_shared<PreparedShaders>();
     std::shared_ptr<const RegisteredShaderState> registeredState;
+    std::shared_ptr<ShaderControlFlowValidation> controlFlowValidation = std::make_shared<ShaderControlFlowValidation>();
 };
 
 
 std::shared_ptr<const ShaderSnapshot> ReadRawComputeShader(std::uint64_t address);
+void ValidateShaderControlFlow(const ShaderSnapshot& snapshot, std::size_t codeOffset);
+void ReuseShaderControlFlowValidation(ShaderSnapshot& snapshot, const ShaderSnapshot& previous);
 
 std::uint64_t NullPixelProgramAddress();
 void PublishRegisteredShader(std::shared_ptr<ShaderRegistry>& registry, const std::shared_ptr<const ShaderSnapshot>& snapshot);

@@ -1,0 +1,4 @@
+[time] scheduler tick raised to 0.5 ms (was 0.50 ms, now 0.50 ms, timed waits fine)
+[perf-controls] merge_draw_barriers=1 bda_table_device_local=1
+[perf-controls] merge_draw_barriers=0 bda_table_device_local=0
+Presentation control-file polling and partial edit rejection passed

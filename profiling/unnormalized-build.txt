@@ -1,0 +1,13 @@
+[0/2] Re-checking globbed directories...
+[1/13] Hashing the shader recompiler sources for the shader disk cache
+[2/13] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/shader_recompiler_agc_driver.dir/__/__/__/shader/recompiler/SpirvBackend/src/SpirvImageEmitter.cpp.obj
+[3/13] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/shader_recompiler_agc_driver.dir/__/__/__/shader/recompiler/ShaderDiskCache.cpp.obj
+[4/13] Linking CXX static library core\libs\prx\libSceAgcDriver\libshader_recompiler_agc_driver.a
+[5/13] Linking CXX shared library core\libs\libs\unpatched\libSceAgcDriver.prx
+[6/13] Linking CXX executable core\libs\prx\libSceAgcDriver\agc_shader_replay.exe
+[7/13] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/agc_driver_runtime_images_tests.dir/tests/execution/RuntimeImages.cpp.obj
+[8/13] Linking CXX executable tests\agc_driver_runtime_images_tests.exe
+[9/13] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/agc_driver_image_address_dimension_tests.dir/tests/execution/ImageAddressDimension.cpp.obj
+[10/13] Linking CXX executable tests\agc_driver_image_address_dimension_tests.exe
+[11/13] Building CXX object core/libs/prx/libSceAgcDriver/CMakeFiles/agc_driver_image_sample_unnormalized_tests.dir/tests/execution/ImageSampleUnnormalized.cpp.obj
+[12/13] Linking CXX executable tests\agc_driver_image_sample_unnormalized_tests.exe

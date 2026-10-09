@@ -23,6 +23,7 @@
 #include <iostream>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -352,14 +353,48 @@ void RequireRefused(AgcDriver::VulkanDevice& device, std::span<const std::uint32
     Require(refusal.find(reason) != std::string::npos, what + " of a converted image was not refused: " + refusal);
 }
 
+void CheckConvertedFiltering(AgcDriver::VulkanDevice& device, std::uint8_t* texels) {
+    for (const auto format : {UnormFormat, FloatFormat}) {
+        for (std::uint32_t index = 0; index < Threads; ++index) {
+            const auto texel = format == UnormFormat ? LoadTexel(index) : FloatTexel(index);
+            std::memcpy(texels + index * 4u, &texel, 4u);
+        }
+        for (const bool unnormalized : {false, true}) {
+            Run(device, unnormalized ? std::span<const std::uint32_t>(TexelSpreadSampleLz) : std::span<const std::uint32_t>(SpreadSampleLz),
+                TextureDescriptor(texels, format, SwizzleXYZ1, Threads),
+                unnormalized ? UnnormalizedBilinearSampler : EdgeBilinearSampler, 1u);
+            for (std::uint32_t index = 0; index < Threads; ++index) {
+                const auto previous = index == 0u ? 0u : index - 1u;
+                for (std::uint32_t component = 0; component < 4u; ++component) {
+                    const auto value = [&](std::uint32_t pixel) {
+                        if (format == UnormFormat) return std::bit_cast<float>(Selected(LoadTexel(pixel), SwizzleXYZ1, component, true).bits);
+                        return component == 3u ? 1.0f : FloatValues[(pixel + component * 4u) % 11u];
+                    };
+                    const auto expected = 0.25f * value(previous) + 0.75f * value(index);
+                    const auto actual = std::bit_cast<float>(Output[index * 4u + component]);
+                    Require(std::isfinite(actual) && std::abs(actual - expected) <= 0.00001f,
+                        "converted bilinear sample: format " + std::to_string(format) + " unnormalized " + std::to_string(unnormalized) +
+                        " texel " + std::to_string(index) + " component " + std::to_string(component) +
+                        " actual " + std::to_string(actual) + " expected " + std::to_string(expected));
+                }
+            }
+        }
+    }
 }
 
-int main() {
+}
+
+int main(int argc, char** argv) {
     try {
         const auto device = OpenVulkanTestDevice();
         if (!device) return VulkanTestSkipped;
         GuestBlock block;
         auto* texels = block.Data();
+        if (argc == 2 && std::string_view(argv[1]) == "--filter-only") {
+            CheckConvertedFiltering(*device, texels);
+            std::puts("converted normalized and unnormalized filtering tests passed");
+            return 0;
+        }
         for (std::uint32_t index = 0; index < LoadWidth; ++index) {
             const auto texel = LoadTexel(index);
             std::memcpy(texels + index * 4u, &texel, 4u);

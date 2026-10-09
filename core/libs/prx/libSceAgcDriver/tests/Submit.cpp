@@ -497,8 +497,22 @@ void testWorkerFailure() {
 
 }
 
-int main() {
+int main(int argc, char** argv) {
     try {
+        if (argc == 2 && std::strcmp(argv[1], "--labels-only") == 0) {
+            testEndOfPipeInterrupts();
+            testLabelStoredSinceSubmission();
+            testEndOfPipeLabelsWithoutWork();
+            testLabelHeldAtSubmission();
+            testWideLabelStoredSinceSubmission();
+            testWaitFreeSubmissionAfterEarlierQueue0Work();
+            testWaitFreeSubmissionQueue0WaitsOn();
+            testWaitFreeSubmissionBehindHeldOne();
+            testWaitFreeSubmissionTheCpuWaitsFor();
+            LibcRunShutdown_nid_postfix();
+            std::puts("AGC driver label and submission-order tests passed");
+            return 0;
+        }
         alignas(256) std::array<std::uint32_t, 64> rawCode{};
         rawCode.fill(0xbf800000);
         rawCode[0] = 0xbe8003ff;
