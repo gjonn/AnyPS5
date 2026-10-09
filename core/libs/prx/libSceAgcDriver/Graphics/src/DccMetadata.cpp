@@ -17,6 +17,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -433,12 +434,28 @@ DccKeys readDccKeys(std::uint64_t metaAddress, std::size_t count, bool& memoized
             recorder->Sync();
         }
     }
+    static const bool scanMemo = std::getenv("APS5_NO_DCC_SCAN_MEMO") == nullptr;
+    struct ScanEntry {
+        std::uint64_t generation;
+        DccKeys keys;
+    };
+    thread_local std::unordered_map<std::uint64_t, ScanEntry> scans;
+    const auto scanKey = metaAddress ^ (static_cast<std::uint64_t>(count) << 48u);
+    const auto generation = scanMemo ? GuestMemory::CollectWrites(metaAddress, count) : 0;
+    if (generation != 0) {
+        if (const auto found = scans.find(scanKey); found != scans.end() && GuestMemory::UnchangedSince(metaAddress, count, found->second.generation)) return found->second.keys;
+    }
     const auto* keys = reinterpret_cast<const std::uint8_t*>(metaAddress);
     const auto first = keys[0];
     const auto start = ScanProfileEnabled() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     const bool uniform = AllKeysEqual(keys + 1, count - 1, first);
     if (ScanProfileEnabled()) CountScan(count, start);
-    return uniform ? ByteKeys(first) : DccKeys::Mixed;
+    const auto result = uniform ? ByteKeys(first) : DccKeys::Mixed;
+    if (generation != 0) {
+        if (scans.size() >= 4096) scans.clear();
+        scans[scanKey] = {generation, result};
+    }
+    return result;
 }
 
 DccKeys textureClearKeys(const GuestTextureResource& resource, std::uint64_t guestBytes, bool& memoized) {

@@ -2436,6 +2436,36 @@ bool StorageTexture::FlushPending(std::uint64_t address, std::size_t bytes, cons
     if (trace) {
         for (const auto& texture : flush) std::fprintf(stderr, "[flush] image 0x%llx+0x%llx for %s 0x%llx+0x%zx\n", static_cast<unsigned long long>(texture->descriptor.baseAddress), static_cast<unsigned long long>(texture->guestBytes), reason, static_cast<unsigned long long>(address), bytes);
     }
+    static const bool traceAliases = std::getenv("APS5_TRACE_ALIAS_FLUSH") != nullptr;
+    if (traceAliases) {
+        static std::mutex aliasMutex;
+        static std::map<std::string, std::uint64_t> aliasCounts;
+        static auto aliasReport = std::chrono::steady_clock::now();
+        const auto describe = [](const StorageTexture* texture) {
+            if (texture == nullptr) return std::string("cpu");
+            const auto& d = texture->descriptor;
+            char text[160];
+            std::snprintf(text, sizeof(text), "fmt%u tile%u dim%u %ux%ux%u mips%u/%u base%u arr%u sel%u%u%u%u", d.format, static_cast<unsigned>(d.tileMode), static_cast<unsigned>(d.dimension), d.width, d.height, d.depthOrLastArray, d.baseLevel, d.mipCount, d.lastLevel, d.baseArray, d.dstSelX, d.dstSelY, d.dstSelZ, d.dstSelW);
+            return std::string(text);
+        };
+        std::lock_guard aliasLock(aliasMutex);
+        for (const auto& texture : flush) {
+            char key[96];
+            std::snprintf(key, sizeof(key), "%s 0x%llx+0x%llx ", reason, static_cast<unsigned long long>(texture->descriptor.baseAddress), static_cast<unsigned long long>(texture->guestBytes));
+            ++aliasCounts[std::string(key) + "{" + describe(texture.get()) + "} -> {" + describe(refreshing) + "}"];
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now - aliasReport >= std::chrono::seconds(10)) {
+            aliasReport = now;
+            std::vector<std::pair<std::uint64_t, std::string>> sorted;
+            for (const auto& [name, count] : aliasCounts) sorted.emplace_back(count, name);
+            std::sort(sorted.rbegin(), sorted.rend());
+            std::string text = "[alias-flush] top (10 s):";
+            for (std::size_t i = 0; i < std::min<std::size_t>(sorted.size(), 12); ++i) text += " | " + std::to_string(sorted[i].first) + "x " + sorted[i].second;
+            std::fprintf(stderr, "%s\n", text.c_str());
+            aliasCounts.clear();
+        }
+    }
     std::lock_guard gpu(GuestMemory::GpuMutex());
     std::exception_ptr failure;
     const auto previousReason = std::exchange(flushReason, reason);

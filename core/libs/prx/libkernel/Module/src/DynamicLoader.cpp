@@ -2,6 +2,7 @@
 #include <nid/NidCompute.hpp>
 #include <array>
 #include <filesystem>
+#include <fstream>
 #include <cstdio>
 #include <map>
 #include <memory>
@@ -124,7 +125,20 @@ void* APS5_VABI dlopen_nid_postfix(const char* path, int flags) {
         } else {
             if (!*path) { Error("dlopen: empty module path"); return nullptr; }
             const auto resolved = RelinkedModulePath(ResolvePath_nid_no_patch(path));
+            {
+                std::ifstream image(resolved, std::ios::binary);
+                char magic[2] = {};
+                if (image && image.read(magic, sizeof(magic)) && (magic[0] != 'M' || magic[1] != 'Z')) {
+                    const auto message = "dlopen: " + resolved.string() + " is not a host module (relink it to .guest.prx)";
+                    Error(message.c_str()); return nullptr;
+                }
+            }
+            DWORD previousMode = 0;
+            SetThreadErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX, &previousMode);
             module->native = LoadLibraryExW(resolved.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+            const auto loadError = GetLastError();
+            SetThreadErrorMode(previousMode, nullptr);
+            SetLastError(loadError);
         }
         if (!module->native) {
             char message[128];

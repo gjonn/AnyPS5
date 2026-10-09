@@ -3196,7 +3196,14 @@ void ShaderResources::MarkGpuWrites(Recorder& recorder) {
     // The ranges this use reads in place through their host imports (read-only and written elements
     // alike, and an address-based build's whole leased heaps), before the writes: a CPU store into
     // one of them (the copy HLE) must not land before the recorded work read it.
-    recorder.NotePendingReads(guestMemory.InPlaceReads(), guestMemory.HoldsLease() ? Recorder::ReadKind::AddressBased : Recorder::ReadKind::DispatchElement);
+    static const bool dedupeSpaceReads = std::getenv("APS5_NO_READ_SET_DEDUPE") == nullptr;
+    const auto readKind = guestMemory.HoldsLease() ? Recorder::ReadKind::AddressBased : Recorder::ReadKind::DispatchElement;
+    if (const auto spaceSerial = dedupeSpaceReads ? guestMemory.AddressSpaceSerial() : 0; spaceSerial != 0) {
+        if (!recorder.ReadSetNoted(spaceSerial)) recorder.NotePendingReads(guestMemory.AddressSpaceReads(), readKind);
+        recorder.NotePendingReads(guestMemory.OwnInPlaceReads(), readKind);
+    } else {
+        recorder.NotePendingReads(guestMemory.InPlaceReads(), readKind);
+    }
     if (SkipWriteBack()) return;
     for (std::size_t index = 0; index < storageTextures.size(); ++index) {
         if (storageWritten[index]) storageTextures[index]->MarkDirty();
