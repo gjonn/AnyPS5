@@ -70,7 +70,7 @@ struct DebugControlState {
     DebugControlState() {
         for (std::size_t i = 0; i < kDebugKeys.size(); ++i) {
             const char* text = std::getenv(kDebugKeys[i].environment);
-            std::uint64_t value = 0;
+            std::uint64_t value = i == static_cast<std::size_t>(DebugKey::ClearDepthPerFrame) ? 0x1210c10000ull : 0;
             if (text != nullptr) value = *text == '\0' ? 1ull : std::strtoull(text, nullptr, kDebugKeys[i].hex ? 16 : 0);
             if (text != nullptr && value == 0 && !kDebugKeys[i].hex && std::string_view(text) != "0") value = 1;
             values[i].store(value, std::memory_order_relaxed);
