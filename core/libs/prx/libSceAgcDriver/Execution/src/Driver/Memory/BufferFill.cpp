@@ -172,6 +172,7 @@ bool Driver::fillBuffer(QueueState& queue, std::uint32_t queueId, std::span<cons
         }
         phase(FillFlush);
         const bool stored = cleared || localDevice->FillBuffer(base, bytes, pattern);
+        Graphics::TraceDepthMetadataFill(base, bytes, pattern[0], pattern[0] == pattern[1] && pattern[1] == pattern[2] && pattern[2] == pattern[3], stored ? "hle" : "hle-unstored");
         if (stored && pattern[0] == pattern[1] && pattern[1] == pattern[2] && pattern[2] == pattern[3]) Graphics::NoteDepthMetadataFill(base, bytes, pattern[0]);
         phase(FillDevice);
         if (uniformKeysFill && stored && !cleared) {

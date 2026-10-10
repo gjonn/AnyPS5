@@ -3,9 +3,45 @@
 #include "prx/libSceAgcDriver/Execution/include/Driver/Diagnostics.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
 
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <set>
+#include <sstream>
+
 namespace AgcDriver::DriverDetail {
 
 namespace {
+
+void CaptureRejectedDrawState(const QueueState& queue) noexcept {
+    static const char* directory = std::getenv("APS5_CAPTURE_DRAW_STATE");
+    if (directory == nullptr) return;
+    try {
+        static std::mutex mutex;
+        static std::set<std::uint64_t> captured;
+        std::lock_guard lock(mutex);
+        if (captured.size() >= 16) return;
+        std::ostringstream data;
+        data << "APS5_DRAW_STATE_1\n" << std::hex;
+        const auto bank = [&](char name, const Registers& registers) {
+            for (const auto& [offset, value] : registers) data << name << ' ' << offset << ' ' << value << '\n';
+        };
+        bank('c', queue.context);
+        bank('s', queue.shader);
+        bank('u', queue.userConfig);
+        const auto text = data.str();
+        if (text.size() > 1024 * 1024) return;
+        std::uint64_t hash = 14695981039346656037ull;
+        for (const unsigned char byte : text) hash = (hash ^ byte) * 1099511628211ull;
+        if (captured.contains(hash)) return;
+        std::ofstream file(std::filesystem::path(directory) / ("draw-state-" + std::to_string(hash) + ".txt"), std::ios::binary);
+        file << text;
+        file.close();
+        if (file) captured.insert(hash);
+    } catch (...) {
+    }
+}
 
 std::uint32_t ReadGraphicsRegister(const Registers& registers, std::uint32_t offset) {
     const auto found = registers.find(offset);
@@ -149,9 +185,16 @@ void Driver::initializeMerged(const QueueState& queue, DrawProgram& program, std
 
 std::shared_ptr<DrawDecode> Driver::decodeDraw(const QueueState& queue, const Submission& submission) {
     auto product = std::make_shared<DrawDecode>();
-    product->state = Graphics::DecodeState(queue);
+    try {
+        product->state = Graphics::DecodeState(queue);
+    } catch (...) {
+        CaptureRejectedDrawState(queue);
+        throw;
+    }
     DecodeGraphicsPrograms(*product, queue, *submission.shaders, false, true);
     product->pixel = Graphics::DecodePixelStageInfo(queue.context, Graphics::ExportMappings(product->state), Graphics::PixelProgramSkipped(queue));
+    product->pixel.reversedBlend = Graphics::ReversedBlend(product->state);
+    product->pixel.targetExportPacking = Graphics::ExportPackings(product->state);
     return product;
 }
 

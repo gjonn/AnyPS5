@@ -82,6 +82,7 @@ std::uint32_t BuiltInForInput(StageInputKind kind) {
 std::uint32_t PerVertexType(SpirvEmitterState& state) {
     return state.module.DecoratedType(spv::OpTypeStruct,
         {{spv::OpMemberDecorate, {0u, spv::DecorationBuiltIn, spv::BuiltInPosition}},
+         {spv::OpMemberDecorate, {0u, spv::DecorationInvariant}},
          {spv::OpDecorate, {spv::DecorationBlock}}},
         TypeF32Vector(state, 4u));
 }

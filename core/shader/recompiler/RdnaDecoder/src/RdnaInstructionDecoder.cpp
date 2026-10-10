@@ -155,7 +155,13 @@ void DecodeRdnaProgram(std::span<const std::uint32_t> code, RdnaProgram& program
     std::uint32_t furthestBranchTarget = 0;
     for (std::uint32_t wordIndex = 0; wordIndex < code.size();) {
         const std::uint32_t programCounter = wordIndex * static_cast<std::uint32_t>(sizeof(std::uint32_t));
-        program.instructions.push_back(DecodeRdnaInstruction(programCounter, code, wordIndex));
+        try {
+            program.instructions.push_back(DecodeRdnaInstruction(programCounter, code, wordIndex));
+        } catch (const std::invalid_argument& error) {
+            char where[48];
+            std::snprintf(where, sizeof(where), " at pc 0x%x word 0x%08x", programCounter, code[wordIndex]);
+            throw std::invalid_argument(error.what() + std::string(where));
+        }
 
         const RdnaInstruction& instruction = program.instructions.back();
         wordIndex += instruction.wordCount;

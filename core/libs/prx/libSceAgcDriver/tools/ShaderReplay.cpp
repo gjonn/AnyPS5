@@ -3,6 +3,7 @@
 #include "ControlFlow/GraphBuilder.hpp"
 #include "ControlFlow/RequestSerializer.hpp"
 #include "ControlFlow/Structurizer.hpp"
+#include "ControlFlow/UserDataCalls.hpp"
 #include "Optimization/ResourceMaterializer.hpp"
 #include "Optimization/ResourceProgram.hpp"
 #include "Recompiler.hpp"
@@ -18,6 +19,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <chrono>
 
 namespace {
 
@@ -46,6 +48,36 @@ bool g_graph = false;
 bool g_maintenance8 = false;
 bool g_code = false;
 bool g_images = false;
+bool g_rawControlFlow = false;
+
+bool ReplayControlFlow(const char* path) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    const auto size = file.tellg();
+    if (size <= 0 || size > 4 * 1024 * 1024 || size % 4 != 0) throw std::runtime_error("invalid raw shader size");
+    std::vector<std::uint32_t> code(static_cast<std::size_t>(size) / 4);
+    file.seekg(0);
+    file.read(reinterpret_cast<char*>(code.data()), size);
+    if (!file) throw std::runtime_error("raw shader read failed");
+    if (g_assembly) {
+        for (std::uint32_t index = 0; index < code.size();) {
+            try {
+                const auto instruction = ShaderRecompiler::DecodeRdnaInstruction(index * 4, code, index);
+                std::printf("%s\n", ShaderRecompiler::RdnaInstructionToString(instruction).c_str());
+                index += instruction.wordCount;
+            } catch (const std::exception& error) {
+                std::printf("decode stopped: pc=0x%x word=0x%08x reason=%s\n", index * 4, code[index], error.what());
+                throw;
+            }
+        }
+    }
+    const auto start = std::chrono::steady_clock::now();
+    const auto decoded = ShaderRecompiler::RdnaInstructionDecoder{}.Decode(code);
+    auto graph = ShaderRecompiler::GraphBuilder{}.Build(decoded);
+    ShaderRecompiler::Structurizer{}.Structurize(graph);
+    const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    std::printf("%s: control-flow passed, words=%zu ms=%.3f\n", path, code.size(), ms);
+    return true;
+}
 
 bool ReadCaptured(void* context, std::uint64_t address, std::uint32_t* value) {
     const auto& request = *static_cast<const ShaderRecompiler::RecompileRequest*>(context);
@@ -76,6 +108,24 @@ bool Replay(const char* path) {
             std::printf("  mesh: input primitive %u, %u primitives / %u vertices per group, max %u vertices / %u primitives, %u threads, lds %u dwords, provoking %u, ESGS item %u\n", mesh.inputPrimitive, mesh.primitivesPerGroup, mesh.verticesPerGroup, mesh.maxVertices, mesh.maxPrimitives, mesh.threadsPerGroup, mesh.ldsSizeDwords, mesh.provokingVertex, mesh.esgsItemSize);
         }
     }
+    ShaderRecompiler::CapturedCallProgram captured;
+    if (request.request.shader.capturedCalls.empty()) {
+        try {
+            const auto start = std::chrono::steady_clock::now();
+            captured = ShaderRecompiler::ResolveUserDataCalls(request.request, ReadCaptured, &request.request);
+            const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            if (!captured.code.empty()) {
+                request.request.shader.code = captured.code;
+                request.request.shader.capturedCalls = captured.calls;
+                std::printf("  resolved calls: %zu calls, %zu code words, %.1f ms\n", captured.calls.size(), captured.code.size(), ms);
+                if (g_code) {
+                    for (std::size_t i = 0; i < 8 && i < captured.code.size(); ++i) std::printf("  word %zu: %08x\n", i, captured.code[i]);
+                }
+            }
+        } catch (const std::exception& error) {
+            std::printf("  call resolution failed: %s\n", FirstLine(error.what()).c_str());
+        }
+    }
     if (g_memory) {
         // --mem: the captured inputs. User data words are printed; each memory region is written to
         // mem_<code address>_<guest address>.bin next to the request for inspection with other tools.
@@ -104,13 +154,15 @@ bool Replay(const char* path) {
         std::printf("  code -> %s\n", name.c_str());
     }
     if (g_assembly) {
-        const auto program = ShaderRecompiler::RdnaInstructionDecoder{}.Decode(request.request.shader.code);
+        const auto program = ShaderRecompiler::DecodeShaderProgram(request.request.shader);
         // Raw first words carry what the text omits (branch offsets, waitcnt fields).
         for (const auto& instruction : program.instructions) std::printf("raw=%08x %s\n", instruction.rawWords[0], ShaderRecompiler::RdnaInstructionToString(instruction).c_str());
     }
     if (g_graph) {
-        const auto program = ShaderRecompiler::RdnaInstructionDecoder{}.Decode(request.request.shader.code);
-        auto graph = ShaderRecompiler::GraphBuilder{}.Build(program);
+        const auto program = ShaderRecompiler::DecodeShaderProgram(request.request.shader);
+        const auto& context = request.request.context;
+        const ShaderRecompiler::SwappcInfo swappc{context.vertex.has_value(), context.userDataBaseRegister, static_cast<std::uint32_t>(context.userData.size()), request.request.shader.capturedCalls};
+        auto graph = ShaderRecompiler::GraphBuilder{}.Build(program, &swappc);
         std::printf("control flow graph:\n%s", ShaderRecompiler::GraphToString(graph).c_str());
         try {
             ShaderRecompiler::Structurizer{}.Structurize(graph);
@@ -162,8 +214,10 @@ bool Replay(const char* path) {
     }
     try {
         if (g_maintenance8) request.request.target.nonConstantImageOffsets = true;
+        const auto start = std::chrono::steady_clock::now();
         const auto result = ShaderRecompiler::Recompile(request.request);
-        std::printf("  recompiled: %zu SPIR-V words\n", result.spirv.size());
+        const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        std::printf("  recompiled: %zu SPIR-V words, %.1f ms\n", result.spirv.size(), ms);
         if (g_spirv) {
             std::string name(path);
             name = name.substr(name.find_last_of("/\\") + 1) + ".spv";
@@ -199,11 +253,15 @@ bool Replay(const char* path) {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: agc_shader_replay [--dis] [--asm] [--cfg] [--mem] [--images] [--spv] [--code] [--maintenance8] <shader.req>...\n  the driver writes shader_<address>.req files with APS5_DUMP_SHADERS or APS5_DUMP_SHADER_FAILURES\n");
+        std::fprintf(stderr, "usage: agc_shader_replay [--dis] [--asm] [--cfg] [--mem] [--images] [--spv] [--code] [--maintenance8] <shader.req>...\n  agc_shader_replay --raw-control-flow <validation.bin>...\n  the driver writes shader_<address>.req files with APS5_DUMP_SHADERS or APS5_DUMP_SHADER_FAILURES\n");
         return 2;
     }
     int failures = 0;
     for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--raw-control-flow") {
+            g_rawControlFlow = true;
+            continue;
+        }
         if (std::string(argv[i]) == "--images") {
             g_images = true;
             continue;
@@ -237,9 +295,9 @@ int main(int argc, char** argv) {
             continue;
         }
         try {
-            if (!Replay(argv[i])) ++failures;
+            if (!(g_rawControlFlow ? ReplayControlFlow(argv[i]) : Replay(argv[i]))) ++failures;
         } catch (const std::exception& error) {
-            std::printf("%s: could not load request: %s\n", argv[i], FirstLine(error.what()).c_str());
+            std::printf("%s: %s: %s\n", argv[i], g_rawControlFlow ? "raw control-flow failed" : "could not load request", FirstLine(error.what()).c_str());
             ++failures;
         }
     }

@@ -4,6 +4,7 @@
 #include "ThreadOwned.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/DepthSurface.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/ShaderResources.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/DebugControls.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Recorder.hpp"
 #include <algorithm>
 #include <atomic>
@@ -27,6 +28,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 #include "prx/libc/include/GuestAllocations.hpp"
@@ -235,8 +237,7 @@ bool SampledFromStorageEligible(const Context& context, const GuestTextureResour
 // Whether a sampled texture over a fast-cleared, storage-eligible surface views the cleared storage
 // image (see cachedTexture). APS5_NO_CLEARED_VIEW=1 keeps such surfaces snapshots, as before.
 bool ClearedViewEnabled() {
-    static const bool disabled = std::getenv("APS5_NO_CLEARED_VIEW") != nullptr;
-    return !disabled;
+    return DebugValue(DebugKey::NoClearedView) == 0;
 }
 
 // Surfaces whose storage image could not be made (no writable committed pages, say): remembered
@@ -283,6 +284,7 @@ std::shared_ptr<StorageTexture> sampledStorageSource(const Context& context, con
 
 // `guestBytes` is the surface size when the caller described the surface already (0: described here).
 std::shared_ptr<Texture> cachedTexture(const Context& context, std::span<const std::uint32_t> words, const GuestTextureResource& resource, VkComponentMapping components, std::uint64_t guestBytes = 0, bool depthCompare = false) {
+    const RefreshSiteScope site("sampled");
     CaptureTrace::Log("sampled-lookup address=%llx width=%u height=%u dcc=%llx", static_cast<unsigned long long>(resource.baseAddress), resource.width, resource.height, static_cast<unsigned long long>(resource.dccAddress));
     if (auto* recorder = Recorder::Active(); recorder != nullptr) recorder->BoundKeptBytes();
     if (auto depth = DepthSurfaceTexture(context, words, resource, components)) return depth;
@@ -364,7 +366,8 @@ std::shared_ptr<Texture> cachedTexture(const Context& context, std::span<const s
     // so a write the game made since the last walk is invisible until a collect stamps its page. The
     // walk is memoized per packet, so a texture viewed from a storage image repeats it for free.
     auto generation = GuestMemory::CollectWrites(address, bytes);
-    if (source != nullptr && !GuestMemory::UnchangedSince(address, bytes, source->Generation())) {
+    static const bool alwaysRefreshViews = std::getenv("APS5_ALWAYS_REFRESH_VIEWS") != nullptr;
+    if (source != nullptr && (alwaysRefreshViews || !GuestMemory::UnchangedSince(address, bytes, source->Generation()))) {
         // The CPU wrote the memory while results were pending: Refresh merges them the usual way.
         source->Refresh();
     }
@@ -393,7 +396,11 @@ std::shared_ptr<Texture> cachedTexture(const Context& context, std::span<const s
             // written meanwhile is taken in by refreshing the image. A fast clear the image cannot
             // see (keys, and no pending results to prefer) ends the view: a snapshot holds the clear.
             if ((source == nullptr || source == it->source) && (source != nullptr || *keys == DccKeys::Uncompressed) && StorageImageServesKeys(*it->source, resource.dccAddress)) {
-                if (!GuestMemory::UnchangedSince(address, bytes, it->source->Generation())) it->source->Refresh();
+                static const bool alwaysRefresh = std::getenv("APS5_ALWAYS_REFRESH_VIEWS") != nullptr;
+                if (alwaysRefresh || !GuestMemory::UnchangedSince(address, bytes, it->source->Generation())) it->source->Refresh();
+                static const bool verifyViews = std::getenv("APS5_VERIFY_TEXTURES") != nullptr;
+                static std::atomic<std::uint64_t> viewHits{0};
+                if (verifyViews && (viewHits.fetch_add(1, std::memory_order_relaxed) % 20000u) == 0u) std::fprintf(stderr, "[verify-tex] %llu storage-view hits (not byte-checked)\n", static_cast<unsigned long long>(viewHits.load(std::memory_order_relaxed)));
                 it->keys = *keys;
                 touchTexture(cache, it);
                 logLookup({it->texture.get(), resource, guestBytes, *keys, 0, it->source.get()});
@@ -410,7 +417,18 @@ std::shared_ptr<Texture> cachedTexture(const Context& context, std::span<const s
                 const GuestMemory::ReadSiteScope site(GuestMemory::ReadSite::TextureCompare);
                 return GuestMemory::EqualsCommitted(address, it->bytes);
             };
-            if (*keys != DccKeys::Uncompressed || GuestMemory::UnchangedSince(address, it->bytes.size(), it->generation) || equalsCommitted()) {
+            static const bool verify = std::getenv("APS5_VERIFY_TEXTURES") != nullptr;
+            bool stale = false;
+            static std::atomic<std::uint64_t> verified{0};
+            if (verify && *keys == DccKeys::Uncompressed && (verified.fetch_add(1, std::memory_order_relaxed) % 20000u) == 0u) std::fprintf(stderr, "[verify-tex] %llu snapshot hits checked\n", static_cast<unsigned long long>(verified.load(std::memory_order_relaxed)));
+            if (verify && *keys == DccKeys::Uncompressed && GuestMemory::UnchangedSince(address, it->bytes.size(), it->generation) && !equalsCommitted()) {
+                stale = true;
+                static std::atomic<std::uint32_t> reported{0};
+                if (reported.fetch_add(1, std::memory_order_relaxed) < 200u) {
+                    std::fprintf(stderr, "[verify-tex] stale snapshot 0x%llx %ux%u format %u tile %d bytes 0x%zx: memory changed without a tracked write\n", static_cast<unsigned long long>(address), resource.width, resource.height, resource.format, static_cast<int>(resource.tileMode), it->bytes.size());
+                }
+            }
+            if (!stale && (*keys != DccKeys::Uncompressed || GuestMemory::UnchangedSince(address, it->bytes.size(), it->generation) || equalsCommitted())) {
                 it->generation = generation;
                 touchTexture(cache, it);
                 logLookup({it->texture.get(), resource, guestBytes, *keys, generation, nullptr});
@@ -522,8 +540,9 @@ void evictStorage(StorageTextureCache& cache, std::list<CachedStorageTexture>::i
 // Storage images are shared by every descriptor of one surface (address, extent, layers, format, tile
 // mode): the image holds the whole mip chain, and render targets in the same memory attach to it.
 std::array<std::uint32_t, 8> SurfaceKey(const Context& context, const GuestTextureResource& resource) {
+    const auto dimension = resource.dimension == TextureDimension::kCube && DebugValue(DebugKey::SplitCubeStorage) == 0 ? TextureDimension::k2DArray : resource.dimension;
     // Guest formats that store in the same Vulkan format share the image (views carry the difference).
-    return {static_cast<std::uint32_t>(resource.baseAddress), static_cast<std::uint32_t>(resource.baseAddress >> 32u), resource.width, resource.height, (resource.depthOrLastArray << 16u) | (resource.mipCount & 0xffffu), (static_cast<std::uint32_t>(resource.tileMode) << 12u) | (static_cast<std::uint32_t>(resource.dimension) << 20u), resource.baseArray, static_cast<std::uint32_t>(StorageFormatForGuest(context, resource.format))};
+    return {static_cast<std::uint32_t>(resource.baseAddress), static_cast<std::uint32_t>(resource.baseAddress >> 32u), resource.width, resource.height, (resource.depthOrLastArray << 16u) | (resource.mipCount & 0xffffu), (static_cast<std::uint32_t>(resource.tileMode) << 12u) | (static_cast<std::uint32_t>(dimension) << 20u), resource.baseArray, static_cast<std::uint32_t>(StorageFormatForGuest(context, resource.format))};
 }
 
 struct ExtendedSurfaces {
@@ -605,6 +624,7 @@ std::shared_ptr<Texture> nullTexture(const Context& context, ShaderRecompiler::D
 std::shared_ptr<StorageTexture> lookupStorageTexture(const Context& context, std::span<const std::uint32_t> words, const GuestTextureResource& viewed, std::uint32_t mip, std::uint64_t guestBytes);
 
 std::shared_ptr<StorageTexture> cachedStorageTexture(const Context& context, std::span<const std::uint32_t> words, const GuestTextureResource& viewed, std::uint32_t mip, std::uint64_t guestBytes) {
+    const RefreshSiteScope site(std::string_view(g_refreshSite) == "other" ? "storage" : g_refreshSite);
     Require(!DepthStencilPlaneAt(viewed.baseAddress), "storage access to a depth surface's stencil plane is not implemented");
     auto texture = lookupStorageTexture(context, words, viewed, mip, guestBytes);
     if (DepthSurfaceAt(viewed.baseAddress)) SeedStorageFromDepth(context, texture);
@@ -619,7 +639,8 @@ std::shared_ptr<StorageTexture> lookupStorageTexture(const Context& context, std
     const bool profile = LookupOutcomes::Profiled();
     auto start = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     auto& counters = TextureCounts();
-    const auto resource = StorageSurface(context, viewed);
+    auto resource = StorageSurface(context, viewed);
+    if (resource.dimension == TextureDimension::kCube && DebugValue(DebugKey::SplitCubeStorage) == 0) resource.dimension = TextureDimension::k2DArray;
     const StorageKey key{context.device, SurfaceKey(context, resource)};
     auto& cache = StorageTextures();
     std::lock_guard lock(cache.mutex);
@@ -675,6 +696,65 @@ void FlushCachedTextures(VkDevice device) {
     for (const auto& entry : cache.entries) {
         if (entry.key.device == device) entry.texture->Flush();
     }
+}
+
+std::size_t DumpCachedStorageImages(VkDevice device, const std::string& directory, std::span<const std::uint64_t> addresses, std::optional<std::uint32_t> minimumWidth) {
+    std::unique_lock gpu(GuestMemory::GpuMutex(), std::defer_lock);
+    if (!GuestMemory::GpuMutex().HeldByThisThread()) gpu.lock();
+    const std::uint64_t minimum = minimumWidth ? *minimumWidth : addresses.empty() ? DebugValue(DebugKey::DumpMinWidth) : 0u;
+    std::vector<std::shared_ptr<StorageTexture>> images;
+    {
+        auto& cache = StorageTextures();
+        std::lock_guard lock(cache.mutex);
+        for (const auto& entry : cache.entries) {
+            if ((device == VK_NULL_HANDLE || entry.key.device == device) && (addresses.empty() || std::ranges::find(addresses, entry.texture->Descriptor().baseAddress) != addresses.end()) && entry.texture->Descriptor().width >= minimum) images.push_back(entry.texture);
+        }
+    }
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+    std::size_t saved = 0;
+    for (const auto& image : images) {
+        const auto& descriptor = image->Descriptor();
+        char name[128];
+        std::snprintf(name, sizeof(name), "/storage_%llx_%ux%u_t%u_f%u.raw", static_cast<unsigned long long>(descriptor.baseAddress), descriptor.width, descriptor.height, static_cast<unsigned>(descriptor.tileMode), static_cast<unsigned>(image->StorageFormat()));
+        try {
+            image->DumpBaseLevel(directory + name);
+            ++saved;
+        } catch (const std::exception& failure) {
+            std::fprintf(stderr, "[dump-images] %s: %s\n", name, failure.what());
+        }
+    }
+    std::fprintf(stderr, "[dump-images] saved %zu of %zu storage images to %s\n", saved, images.size(), directory.c_str());
+    if (!addresses.empty() || minimumWidth) return saved;
+    static const std::uint64_t snapshotAddress = [] { const char* text = std::getenv("APS5_DUMP_TEXTURE"); return text ? std::strtoull(text, nullptr, 16) : 0ull; }();
+    auto* listing = std::fopen((directory + "/sampled.txt").c_str(), "w");
+    auto& sampled = Textures();
+    std::lock_guard lock(sampled.mutex);
+    std::size_t snapshots = 0;
+    for (const auto& entry : sampled.entries) {
+        if (device != VK_NULL_HANDLE && entry.key.device != device) continue;
+        const auto& words = entry.key.words;
+        const auto format = (words[1] >> 20u) & 0x1ffu;
+        const auto width = ((words[1] >> 30u) | ((words[2] & 0xfffu) << 2u)) + 1u;
+        const auto height = ((words[2] >> 14u) & 0x3fffu) + 1u;
+        const auto nonzero = static_cast<std::size_t>(std::count_if(entry.bytes.begin(), entry.bytes.end(), [](std::byte value) { return value != std::byte{0}; }));
+        if (listing != nullptr) {
+            std::fprintf(listing, "%llx f%u %ux%u sw%u type%u bytes %zu nonzero %zu null %d storage %d keys %d gen %llu words", static_cast<unsigned long long>(entry.address), format, width, height, (words[3] >> 20u) & 31u, words[3] >> 28u, entry.bytes.size(), nonzero, entry.texture && entry.texture->Null() ? 1 : 0, entry.source != nullptr ? 1 : 0, static_cast<int>(entry.keys), static_cast<unsigned long long>(entry.generation));
+            for (const auto word : words) std::fprintf(listing, " %08x", word);
+            std::fprintf(listing, "\n");
+        }
+        if (snapshotAddress != 0 && entry.address == snapshotAddress && !entry.bytes.empty()) {
+            char name[96];
+            std::snprintf(name, sizeof(name), "/snapshot_%llx_f%u_%ux%u_%zu.raw", static_cast<unsigned long long>(entry.address), format, width, height, snapshots++);
+            if (auto* file = std::fopen((directory + name).c_str(), "wb")) {
+                std::fwrite(entry.bytes.data(), 1, entry.bytes.size(), file);
+                std::fclose(file);
+            }
+        }
+    }
+    if (listing != nullptr) std::fclose(listing);
+    std::fprintf(stderr, "[dump-images] listed %zu sampled textures, %zu snapshots\n", sampled.entries.size(), snapshots);
+    return saved;
 }
 
 void ClearCachedTextures(VkDevice device) {
@@ -1622,6 +1702,7 @@ bool ShaderResources::fastRevalidate(std::uint64_t serialBefore, std::span<const
         surface.collected = GuestMemory::CollectWrites(address, bytes);
         if (surface.collected == 0) return fail(FastFail::Collect);
         const auto* source = surface.source;
+        if (source != nullptr && DepthSurfaceAt(address)) return fail(FastFail::Changed);
         if (!keyProofs) {
             // Without proofs the keys are compared with the record's (a cleared view's identity
             // below is the record's too): the scan repeats on every call, as before.
@@ -2799,6 +2880,7 @@ bool ShaderResources::precollectImages() {
 }
 
 std::shared_ptr<Texture> ShaderResources::fastTexture(const ImageRecord& record) {
+    const RefreshSiteScope site("sampled-fast");
     if (record.texture == nullptr || record.texture->RefreshedPerUse()) return nullptr;
     struct Outcome {
         bool profile;
@@ -2818,6 +2900,7 @@ std::shared_ptr<Texture> ShaderResources::fastTexture(const ImageRecord& record)
     // between the stages marks them uncompressed).
     const auto address = record.resource.baseAddress;
     const auto bytes = static_cast<std::size_t>(record.guestBytes);
+    if (record.source != nullptr && DepthSurfaceAt(address)) return nullptr;
     if (GuestMemory::CollectWrites(address, bytes) == 0) return nullptr;
     if (PendingStorageOverlaps(address, bytes, record.source.get())) return nullptr;
     auto keys = record.keys;
@@ -2878,7 +2961,13 @@ void ShaderResources::resolveImageBinding(const ShaderRecompiler::DescriptorBind
                 texture = fastTexture(*record);
                 (texture != nullptr ? counters.fastHits : counters.fastMisses).fetch_add(1, std::memory_order_relaxed);
             }
+            const bool fast = texture != nullptr;
             if (texture == nullptr) texture = cachedTexture(context, words, resource, components, guestBytes, !binding.imageDepthCompare.empty() && binding.imageDepthCompare.at(element));
+            const auto traceSampled = DebugValue(DebugKey::TraceSampled);
+            static std::atomic<int> tracedSampled{0};
+            if (traceSampled != 0 && resource.baseAddress == traceSampled && tracedSampled.fetch_add(1) < 400) {
+                std::fprintf(stderr, "[trace-sampled] 0x%llx fast %d view %d null %d keys %s pending %d format %u dcc 0x%llx texture %p\n", static_cast<unsigned long long>(resource.baseAddress), fast ? 1 : 0, texture->ViewsStorageImage() ? 1 : 0, texture->Null() ? 1 : 0, DccKeysName(TextureClearKeys(resource, guestBytes)), StorageTexture::FindPending(resource.baseAddress, guestBytes) != nullptr ? 1 : 0, resource.format, static_cast<unsigned long long>(resource.dccAddress), static_cast<const void*>(texture.get()));
+            }
             bool baseLevel = false;
             if (element < binding.imageUnnormalized.size() && binding.imageUnnormalized[element]) {
                 const auto range = texture->SampledViewRange(firstLayer);
@@ -2920,6 +3009,10 @@ void ShaderResources::resolveImageBinding(const ShaderRecompiler::DescriptorBind
         // The same surface as the previous element: its image was just looked up and refreshed.
         if (sameAsPrevious && StorageDedupeEnabled()) storageTextures.push_back(storageTextures.back());
         else storageTextures.push_back(cachedStorageTexture(context, words, resource, mip, guestBytes));
+        if (const auto traceStorage = DebugValue(DebugKey::TraceStorage); traceStorage != 0 && resource.baseAddress == traceStorage) {
+            const auto packet = GuestMemory::CurrentPacket();
+            std::fprintf(stderr, "[trace-storage] 0x%llx binding %u element %u written %d atomic %d %ux%u mip %u format %u (packet 0x%x queue 0x%x)\n", static_cast<unsigned long long>(resource.baseAddress), binding.binding, element, element >= binding.imageWritten.size() || binding.imageWritten[element] ? 1 : 0, element < binding.imageAtomic.size() && binding.imageAtomic[element] ? 1 : 0, resource.width, resource.height, mip, resource.format, packet.opcode, packet.queue);
+        }
         storageMips.push_back(mip);
         storageKeys.push_back(resource.dccAddress);
         storageFirstLayer.push_back(firstLayer);

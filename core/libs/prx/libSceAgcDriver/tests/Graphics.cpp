@@ -20,6 +20,7 @@
 #include <cstring>
 #include <initializer_list>
 #include <iostream>
+#include <fstream>
 #include <map>
 #include <optional>
 #include <set>
@@ -646,6 +647,29 @@ void TuningFieldTests() {
     }
 }
 
+void PackedFloatTargetTests() {
+    auto queue = makeState();
+    queue.context[0x31c] = 0x4171cu;
+    for (const auto mask : {7u, 15u}) {
+        queue.context[0x8e] = mask;
+        for (const auto blend : {0x60010001u, 0x21000504u, 0x24000400u, 0x25010501u}) {
+            queue.context[0x1e0] = blend;
+            const auto state = AgcDriver::Graphics::DecodeState(queue);
+            Require(state.color.format == VK_FORMAT_R32_UINT && state.color.componentMapping == 0xc6u && state.color.packing == ShaderRecompiler::ColorExportPacking::Float11_11_10, "packed float target layout changed");
+            Require(state.blends[0].blendEnable == VK_FALSE && state.blends[0].colorWriteMask == VK_COLOR_COMPONENT_R_BIT, "packed float replacement must write one integer word");
+            Require(AgcDriver::Graphics::ExportPackings(state)[0] == state.color.packing, "packed float export mode was lost");
+        }
+    }
+    queue.context[0x1e0] = 0x40000504u;
+    expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "requires source replacement");
+    queue.context[0x1e0] = 0;
+    queue.context[0x8e] = 1;
+    expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "partial RGB");
+    queue.context[0x8e] = 7;
+    queue.context[0x31c] |= 0x10000000u;
+    expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "compressed packed float");
+}
+
 void ReversedComponentOrderTests() {
     for (const auto& [swap, mapping] : {std::pair{2u, 0x1bu}, std::pair{3u, 0x93u}}) {
         auto queue = makeState();
@@ -654,7 +678,10 @@ void ReversedComponentOrderTests() {
         Require(state.colors.size() == 1 && state.colors[0].format == VK_FORMAT_R8G8B8A8_UNORM && state.colors[0].componentMapping == mapping, "an 8_8_8_8 target with a reversed component order did not map exports onto RGBA8");
         Require(AgcDriver::Graphics::ExportMappings(state)[0] == mapping && state.blends[0].colorWriteMask == 0xfu, "a reversed 8_8_8_8 target did not write all four channels through its export mapping");
         queue.context[0x1e0] = 0x40010001u;
-        expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "reversed component order");
+        const auto blended = AgcDriver::Graphics::DecodeState(queue);
+        Require(blended.reversedBlend != 0 && blended.blends[0].dstColorBlendFactor == VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR, "reversed blending did not select the secondary factor output");
+        queue.context[0x1e0] = 0x40000006u;
+        expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "destination or constant factor");
         queue.context[0x1e0] = 0;
         queue.context[0x31c] = (queue.context[0x31c] & ~((0x1fu << 2u) | (7u << 8u))) | (12u << 2u) | (7u << 8u);
         const auto wide = AgcDriver::Graphics::DecodeState(queue);
@@ -2541,6 +2568,9 @@ void validationTests() {
         Require(AgcDriver::Graphics::ShortRawVertexBufferBytes(attribute) == std::optional<std::size_t>{8}, "a zero-stride buffer shorter than its element did not keep its in-range dwords");
         attribute.resource.fields[2] = 1;
         Require(AgcDriver::Graphics::ShortRawVertexBufferBytes(attribute) == std::optional<std::size_t>{0}, "a dword past a one-byte zero-stride buffer was read");
+        attribute.resource.fields[3] |= 2u << 28u;
+        Require(AgcDriver::Graphics::ShortRawVertexBufferBytes(attribute) == std::optional<std::size_t>{AgcDriver::Graphics::DecodeVertexFormat(attribute).bytes}, "a zero-stride buffer without bounds checking did not read its whole element");
+        attribute.resource.fields[3] &= ~(3u << 28u);
         attribute.resource.fields[2] = 8;
         attribute.resource.fields[3] = 113u << 12u;
         expectFailure([&] { AgcDriver::Graphics::DecodeVertexFormat(attribute); }, "unsupported vertex format");
@@ -2772,6 +2802,12 @@ void vertexCopyTests() {
         const auto plan = PlanVertexCopies(fetches);
         Require(plan.copies.size() == 1 && plan.copies[0].first == 0x1000 && plan.copies[0].second == 0x1018 + 32 * 9 + 8, "interleaved attributes were not copied as one union");
         Require(plan.copyOf == std::vector<std::size_t>{0, 0, 0} && plan.offsets == std::vector<std::uint64_t>{0x18, 0, 0xc}, "interleaved attribute offsets are wrong");
+        Require(plan.alignments == std::vector<std::uint32_t>{4}, "the union's alignment is not its attributes'");
+    }
+    {
+        const std::array<VertexFetch, 2> fetches{{{0x4000, 0x4100, 16, 0, 2}, {0x4004, 0x4104, 16, 0, 4}}};
+        const auto plan = PlanVertexCopies(fetches);
+        Require(plan.copies.size() == 1 && plan.alignments == std::vector<std::uint32_t>{4}, "a union did not take its strictest attribute alignment");
     }
     {
         const std::array<VertexFetch, 6> fetches{{
@@ -2800,13 +2836,55 @@ void vertexCopyTests() {
     }
 }
 
-int main() {
+int main(int argc, char** argv) {
 #ifdef _WIN32
     _putenv_s("APS5_PIN_WAIT_MS", "200");
 #else
     setenv("APS5_PIN_WAIT_MS", "200", 1);
 #endif
     try {
+        if (argc == 3 && std::string_view(argv[1]) == "--decode-state") {
+            std::ifstream input(argv[2]);
+            std::string header;
+            Require(bool(input >> header) && header == "APS5_DRAW_STATE_1", "invalid draw-state capture header");
+            AgcDriver::QueueState queue;
+            queue.context.clear();
+            queue.shader.clear();
+            queue.userConfig.clear();
+            char bank;
+            std::uint32_t offset, value;
+            std::size_t count = 0;
+            input >> std::hex;
+            while (input >> bank) {
+                Require(bool(input >> offset >> value) && ++count <= 65536 && offset < 0x10000u, "invalid draw-state register row");
+                auto* registers = bank == 'c' ? &queue.context : bank == 's' ? &queue.shader : bank == 'u' ? &queue.userConfig : nullptr;
+                Require(registers != nullptr, "invalid draw-state register bank");
+                (*registers)[offset] = value;
+            }
+            const auto state = AgcDriver::Graphics::DecodeState(queue);
+            std::cout << "decoded " << state.colors.size() << " color targets\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--packed-float-only") {
+            PackedFloatTargetTests();
+            std::cout << "packed float target state tests passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--sampler-only") {
+            RunGuestSamplerResourceTests();
+            std::cout << "Guest sampler decoding and Vulkan state tests passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--reversed-blend-only") {
+            ReversedComponentOrderTests();
+            std::cout << "reversed blend state tests passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--vertex-copy-only") {
+            vertexCopyTests();
+            std::cout << "Vertex copy range and alignment tests passed\n";
+            return 0;
+        }
         {
             const AgcDriver::Graphics::Context context{};
             const AgcDriver::Graphics::State state{};

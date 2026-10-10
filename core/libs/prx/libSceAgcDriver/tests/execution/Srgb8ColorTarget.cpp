@@ -198,7 +198,7 @@ const VkPipelineColorBlendAttachmentState BlendOff = Blend(false, VK_BLEND_FACTO
 const VkPipelineColorBlendAttachmentState Keep = Blend(true, VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ONE);
 const VkPipelineColorBlendAttachmentState Multiply = Blend(true, VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_SRC_COLOR);
 
-void Draw(AgcDriver::VulkanDevice& device, std::vector<AgcDriver::Graphics::ColorTarget> colors, std::vector<VkPipelineColorBlendAttachmentState> blends, std::span<const std::uint32_t> pixelCode) {
+void Draw(AgcDriver::VulkanDevice& device, std::vector<AgcDriver::Graphics::ColorTarget> colors, std::vector<VkPipelineColorBlendAttachmentState> blends, std::span<const std::uint32_t> pixelCode, std::uint32_t reversed = 0, std::uint32_t outputMode = 9) {
     const auto target = device.Target();
     constexpr std::uint32_t waveSize = 64;
     std::vector<std::uint32_t> vertexUserData(4, 0u);
@@ -219,8 +219,13 @@ void Draw(AgcDriver::VulkanDevice& device, std::vector<AgcDriver::Graphics::Colo
     pixel.inputAddr = ShaderRecompiler::PixelInputBit(ShaderRecompiler::PixelInput::PositionX) | ShaderRecompiler::PixelInputBit(ShaderRecompiler::PixelInput::PositionY);
     pixel.posX = true;
     pixel.posY = true;
-    for (std::size_t index = 0; index < colors.size(); ++index) pixel.targetOutputMode.at(index) = 9;
+    for (std::size_t index = 0; index < colors.size(); ++index) pixel.targetOutputMode.at(index) = outputMode;
     pixel.targetExportMapping.fill(0xe4u);
+    pixel.reversedBlend = reversed;
+    for (const auto& color : colors) {
+        pixel.targetExportMapping.at(color.exportIndex) = color.componentMapping;
+        pixel.targetExportPacking.at(color.exportIndex) = color.packing;
+    }
     const std::vector<std::uint32_t> pixelUserData(8, 0u);
     const std::array<ShaderRecompiler::MemoryRegion, 1> pixelMemory{{{reinterpret_cast<std::uintptr_t>(pixelCode.data()), std::as_bytes(pixelCode)}}};
     ShaderRecompiler::RecompileRequest fragment{
@@ -251,6 +256,7 @@ void Draw(AgcDriver::VulkanDevice& device, std::vector<AgcDriver::Graphics::Colo
     state.blends = std::move(blends);
     state.blend = state.blends.front();
     state.blendConstants = {};
+    state.reversedBlend = reversed;
     const AgcDriver::Pm4::DrawParameters draw{0, static_cast<std::uint32_t>(Triangle.size()), 0, 1, 0, false};
     device.Draw(state, draw, shaders);
 }
@@ -332,12 +338,107 @@ void SynchronousDrawTests(AgcDriver::VulkanDevice& device, Block& linear, Block&
     }
 }
 
+void PackedFloatTests(AgcDriver::VulkanDevice& device) {
+    Block block(LinearBytes);
+    const std::array<std::array<float, 4>, 3> sources{{{0.5f, 1.0f, 2.0f, 1.0f}, {4.0f, 8.0f, 16.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 1.0f}}};
+    const std::array<std::uint32_t, 7> expected{{(14u << 27u) | (15u << 16u) | (16u << 5u), (17u << 27u) | (18u << 16u) | (19u << 5u), 0u, (1u << 21u) | (1u << 10u) | 1u, (960u << 21u) | (962u << 10u) | 480u, 0u, (14u << 27u) | (15u << 16u) | (16u << 5u)}};
+    for (std::size_t test = 0; test < sources.size(); ++test) {
+      alignas(256) static constexpr std::array<std::uint32_t, 7> halfCode{0x7e0802ffu, 0x3c003800u, 0x7e0a02ffu, 0x3c004000u, 0xf8001c0fu, 0x00000504u, 0xbf810000u};
+      const auto code = test == 6 ? std::span<const std::uint32_t>(halfCode) : Program(sources[test], false);
+      for (const auto attrib : {LinearAttrib3, TiledAttrib3}) {
+        std::vector<std::uint32_t> initial(LinearBytes / 4, 0x13579bdfu);
+        AgcDriver::GuestMemory::Write(block.Address(), std::as_bytes(std::span(initial)), 1);
+        auto color = DecodeTarget(0, block, (7u << 2u) | (7u << 8u) | (2u << 11u), attrib);
+        auto blend = BlendOff;
+        blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
+        Draw(device, {color}, {blend}, code, 0, test == 6 ? 4 : 9);
+        const auto stored = ReadBack(device, block.Address(), LinearBytes);
+        std::vector<std::uint8_t> bytes(LinearBytes);
+        const AgcDriver::Graphics::ColorTargetLayout layout(Width, Height, color.tileMode, 4);
+        layout.Detile(std::as_bytes(std::span(stored)), std::as_writable_bytes(std::span(bytes)));
+        for (std::size_t i = 0; i < initial.size(); ++i) {
+            std::uint32_t word;
+            std::memcpy(&word, bytes.data() + i * 4, 4);
+            const auto reference = i % Width < ScissorWidth ? expected[test] : initial[i];
+            Require(word == reference, "packed float word mismatch: case=" + std::to_string(test) + " pixel=" + std::to_string(i) + " actual=" + std::to_string(word) + " expected=" + std::to_string(reference));
+        }
+      }
+    }
 }
 
-int main() {
+void ReversedBlendTests(AgcDriver::VulkanDevice& device) {
+    Block block(LinearBytes);
+    const std::array<float, 4> source{0.2f, 0.4f, 0.6f, 0.8f};
+    const std::array<std::uint8_t, 4> destination{35, 75, 115, 155};
+    const auto code = Program(source, false);
+    const auto factor = [&](unsigned f, unsigned c) {
+        switch (f) {
+        case 0: return 0.0f;
+        case 1: return 1.0f;
+        case 2: return source[c];
+        case 3: return 1.0f - source[c];
+        case 4: return source[3];
+        default: return 1.0f - source[3];
+        }
+    };
+    for (const auto swap : {2u, 3u}) {
+        for (const auto op : {VK_BLEND_OP_ADD, VK_BLEND_OP_SUBTRACT, VK_BLEND_OP_REVERSE_SUBTRACT, VK_BLEND_OP_MIN, VK_BLEND_OP_MAX}) {
+            for (unsigned f = 0; f < 6; ++f) {
+              for (const auto mask : {0xfu, 0x1u, 0x2u, 0x4u, 0x8u}) {
+                std::vector<std::uint8_t> initial(LinearBytes);
+                for (size_t i = 0; i < initial.size(); ++i) initial[i] = destination[i % 4];
+                AgcDriver::GuestMemory::Write(block.Address(), std::as_bytes(std::span(initial)), 1);
+                auto color = DecodeTarget(0, block, Rgba8Info | (swap << 11), LinearAttrib3);
+                auto blend = Blend(true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR);
+                blend.colorWriteMask = mask;
+                blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
+                blend.colorBlendOp = blend.alphaBlendOp = op;
+                const bool minmax = op == VK_BLEND_OP_MIN || op == VK_BLEND_OP_MAX;
+                const unsigned srcRgb = minmax ? 1u : f;
+                const unsigned dstRgb = minmax ? 0u : 5u - f;
+                const unsigned srcAlpha = minmax ? 1u : (f + 2) % 6;
+                const unsigned dstAlpha = minmax ? 0u : (f + 4) % 6;
+                const auto flags = 0x80000000u | srcRgb | (dstRgb << 5) | (srcAlpha << 10) | (dstAlpha << 15);
+                Draw(device, {color}, {blend}, code, flags);
+                const auto result = ReadBack(device, block.Address(), LinearBytes);
+                for (size_t i = 0; i < result.size(); ++i) {
+                    float expected = destination[i % 4] / 255.0f;
+                    if ((i / 4) % Width < ScissorWidth && (mask & (1u << (i % 4))) != 0) {
+                        const unsigned semantic = (color.componentMapping >> ((i % 4) * 2)) & 3;
+                        const auto a = source[semantic] * factor(semantic == 3 ? srcAlpha : srcRgb, semantic);
+                        const auto b = expected * factor(semantic == 3 ? dstAlpha : dstRgb, semantic);
+                        if (op == VK_BLEND_OP_MIN) expected = std::min(source[semantic], expected);
+                        else if (op == VK_BLEND_OP_MAX) expected = std::max(source[semantic], expected);
+                        else if (op == VK_BLEND_OP_SUBTRACT) expected = a - b;
+                        else if (op == VK_BLEND_OP_REVERSE_SUBTRACT) expected = b - a;
+                        else expected = a + b;
+                    }
+                    const auto quantized = int(std::lround(std::clamp(expected, 0.0f, 1.0f) * 255));
+                    Require(std::abs(int(result[i]) - quantized) <= 2, "reversed blend mismatch: swap=" + std::to_string(swap) + " op=" + std::to_string(op) + " factor=" + std::to_string(f) + " byte=" + std::to_string(i) + " actual=" + std::to_string(result[i]) + " expected=" + std::to_string(quantized));
+                }
+              }
+            }
+        }
+    }
+}
+
+}
+
+int main(int argc, char** argv) {
     try {
         const auto device = OpenVulkanTestDevice();
         if (!device) return VulkanTestSkipped;
+        if (argc == 2 && std::string(argv[1]) == "--packed-float-only") {
+            PackedFloatTests(*device);
+            std::puts("packed float GPU word tests passed");
+            return 0;
+        }
+        if (argc == 2 && std::string(argv[1]) == "--reversed-blend-only") {
+            ReversedBlendTests(*device);
+            std::puts("reversed blend GPU readback tests passed");
+            return 0;
+        }
         Block recorded(SurfaceBytes);
         Block cleared(SurfaceBytes);
         Block linear(LinearBytes);

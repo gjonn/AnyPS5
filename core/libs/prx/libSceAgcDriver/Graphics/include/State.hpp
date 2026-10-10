@@ -39,6 +39,7 @@ struct ColorTarget {
     std::uint8_t componentMapping;
     ColorTileMode tileMode = ColorTileMode::Linear;
     std::uint32_t elementBytes = 4;
+    ShaderRecompiler::ColorExportPacking packing = ShaderRecompiler::ColorExportPacking::None;
     // DCC metadata of a compressed target (CB_COLOR_INFO DCC_ENABLE), or 0 (see DccMetadata.hpp).
     std::uint64_t dccAddress = 0;
     bool dccAlphaOnMsb = false;
@@ -69,6 +70,10 @@ struct DepthTarget {
     std::uint64_t htileAddress = 0;
     bool htileStencil = false;
     std::uint32_t layers = 1;
+    std::uint64_t arrayAddress = 0;
+    std::uint64_t arrayStencilAddress = 0;
+    std::uint32_t arraySlice = 0;
+    std::uint32_t arraySlices = 0;
 };
 
 struct State {
@@ -113,6 +118,7 @@ ShaderStages DecodeShaderStages(const QueueState& queue);
 State DecodeState(const QueueState& queue);
 std::array<std::uint8_t, 8> ExportMappings(const State& state);
 std::uint32_t ReversedBlend(const State& state);
+std::array<ShaderRecompiler::ColorExportPacking, 8> ExportPackings(const State& state);
 ColorTarget DecodeColorBuffer(const Registers& context, std::uint32_t slot);
 std::size_t CmaskBytes(std::uint32_t width, std::uint32_t height);
 std::uint32_t ColorWriteMask(const Registers& context);

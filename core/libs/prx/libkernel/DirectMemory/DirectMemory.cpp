@@ -842,6 +842,34 @@ bool GuestProtection(uintptr_t addr, int* prot) {
     return true;
 }
 
+extern "C" void KernelProtectedRanges_nid_postfix(void (*emit)(void* context, std::uintptr_t begin, std::uintptr_t end, int prot), void* context) {
+    std::vector<std::pair<std::uintptr_t, ProtectedRange>> ranges;
+    {
+        std::lock_guard lock(g_protectionLock);
+        ranges.assign(g_protections.begin(), g_protections.end());
+    }
+    for (const auto& [begin, range] : ranges) emit(context, begin, range.end, range.prot);
+}
+
+extern "C" void KernelDirectMappings_nid_postfix(void (*emit)(void* context, std::uintptr_t begin, std::uintptr_t end, std::uint64_t backing, std::uint64_t offset), void* context) {
+    struct Entry {
+        std::uintptr_t begin;
+        std::uintptr_t end;
+        std::uint64_t backing;
+        std::uint64_t offset;
+    };
+    std::vector<Entry> entries;
+    {
+        std::lock_guard lock(g_directLock);
+        for (const auto& [begin, mapping] : g_directMappings) {
+            const auto page = g_physPages.find(mapping.phys - mapping.phys % PS5_PAGE_SIZE);
+            const auto offset = page != g_physPages.end() ? page->second.offset + mapping.phys % PS5_PAGE_SIZE : mapping.phys;
+            entries.push_back({begin, mapping.end, static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(mapping.backing.get())), offset});
+        }
+    }
+    for (const auto& entry : entries) emit(context, entry.begin, entry.end, entry.backing, entry.offset);
+}
+
 bool QueryDirectMapping(std::uintptr_t address, std::uintptr_t* start, std::uintptr_t* end, std::uint64_t* offset, int* memoryType) {
     std::lock_guard lock(g_directLock);
     const auto next = g_directMappings.upper_bound(address);

@@ -1452,6 +1452,11 @@ void EmitSampleOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, con
         if (offsetOperand && constantOffset() == nullptr) {
             const bool gatherExtended = std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), static_cast<std::uint32_t>(spv::CapabilityImageGatherExtended)) != state.supportedCapabilities.end();
             if (!state.nonConstantImageOffsets || !gatherExtended) {
+                if ((image.emulatedCompare & EmulatedCompare::NativeOffsetUnsupported) != 0u) {
+                    const auto unavailable = state.module.AllocateId();
+                    state.module.AddFunction(spv::OpUndef, resultType, unavailable);
+                    return unavailable;
+                }
                 ctx.Fail(access.inst, "has a texel offset that is not a constant, which image sampling takes only with VK_KHR_maintenance8 and shaderImageGatherExtended");
             }
             state.module.EmitCapability(spv::CapabilityImageGatherExtended);
@@ -1472,7 +1477,37 @@ void EmitSampleOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, con
             operands.insert(operands.end() - ((operandMask & spv::ImageOperandsMinLodMask) != 0u ? 1 : 0), offset);
 
         }
-        const auto coord = foldOffset ? FoldedOffsetCoord(ctx, access, setup) : setup.coord;
+        auto coord = foldOffset ? FoldedOffsetCoord(ctx, access, setup) : setup.coord;
+        if (unnormalized) {
+            const auto components = setup.dimensionInfo.spatialComponents;
+            const auto floatType = components == 1u ? TypeF32(state) : TypeF32Vector(state, components);
+            state.module.EmitCapability(spv::CapabilityImageQuery);
+            const auto size = state.module.AllocateId();
+            state.module.AddFunction(spv::OpImageQuerySizeLod, ImageViewSizeType(state, image.dimension), size, LoadSampledImageDescriptor(state, mem.resource, access.slot), ConstantU32(state, 0u));
+            const auto extent = Unary(state, spv::OpConvertUToF, floatType, size);
+            const auto scaled = Binary(state, spv::OpFDiv, floatType, coord, extent);
+            const auto floored = state.module.AllocateId();
+            state.module.AddFunction(spv::OpExtInst, floatType, floored, GlslStd450(state), GLSLstd450Floor, coord);
+            auto half = ConstantF32(state, 0x3f000000u);
+            if (components == 2u) {
+                const auto vector = state.module.AllocateId();
+                state.module.AddFunction(spv::OpCompositeConstruct, floatType, vector, half, half);
+                half = vector;
+            }
+            const auto centred = Binary(state, spv::OpFDiv, floatType, Binary(state, spv::OpFAdd, floatType, floored, half), extent);
+            const auto selector = state.module.SpecializationConstant(TypeU32(state), PipelineSpecialization::UnnormalizedBase + mem.sampler, 0u);
+            auto normalize = Binary(state, spv::OpUGreaterThanEqual, TypeBool(state), selector, ConstantU32(state, 2u));
+            auto snap = Binary(state, spv::OpIEqual, TypeBool(state), selector, ConstantU32(state, 3u));
+            if (components == 2u) {
+                const auto normalizeVector = state.module.AllocateId();
+                state.module.AddFunction(spv::OpCompositeConstruct, TypeBoolVector(state, 2), normalizeVector, normalize, normalize);
+                normalize = normalizeVector;
+                const auto snapVector = state.module.AllocateId();
+                state.module.AddFunction(spv::OpCompositeConstruct, TypeBoolVector(state, 2), snapVector, snap, snap);
+                snap = snapVector;
+            }
+            coord = Select(state, floatType, normalize, Select(state, floatType, snap, centred, scaled), coord);
+        }
         const auto sampled = MakeSampledImage(state, mem.resource, mem.sampler, access.slot);
         const auto sample = state.module.AllocateId();
         std::vector<std::uint32_t> words = {opcode, resultType, sample, sampled, coord};

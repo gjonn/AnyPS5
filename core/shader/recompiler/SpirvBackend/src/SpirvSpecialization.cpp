@@ -3,12 +3,14 @@
 #undef SPV_ENABLE_UTILITY_CODE
 #include "SpirvBackend/SpirvSpecialization.hpp"
 #include <algorithm>
+#include <cstdint>
 #include <initializer_list>
-#include <map>
 #include <optional>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace ShaderRecompiler {
 namespace {
@@ -230,6 +232,13 @@ public:
     explicit Specialization(std::span<const std::uint32_t> words) {
         if (words.size() < 5u || words[0] != spv::MagicNumber) throw std::runtime_error("invalid prepared SPIR-V header");
         header.assign(words.begin(), words.begin() + 5);
+        const auto bound = static_cast<std::size_t>(header[3]);
+        types.assign(bound, ScalarType{0u, false});
+        values.assign(bound, 0u);
+        known.assign(bound, 0u);
+        resultTypes.assign(bound, 0u);
+        removed.assign(bound, 0u);
+        instructions.reserve(words.size() / 4u);
         for (std::size_t cursor = 5; cursor < words.size();) {
             const auto count = words[cursor] >> 16u;
             if (count == 0u || count > words.size() - cursor) throw std::runtime_error("truncated prepared SPIR-V instruction");
@@ -239,11 +248,11 @@ public:
             bool hasResult = false;
             bool hasType = false;
             spv::HasResultAndType(op, &hasResult, &hasType);
-            if (hasResult && hasType) resultTypes.emplace(instruction.at(2), instruction.at(1));
-            if (op == spv::OpTypeBool) types.emplace(instruction.at(1), ScalarType{1u, true});
-            if (op == spv::OpTypeInt) types.emplace(instruction.at(1), ScalarType{instruction.at(2), false});
-            if (op == spv::OpConstant && types.contains(instruction.at(1)) && types.at(instruction[1]).width <= 32u) values.emplace(instruction.at(2), instruction.at(3));
-            if (op == spv::OpConstantTrue || op == spv::OpConstantFalse) values.emplace(instruction.at(2), op == spv::OpConstantTrue ? 1u : 0u);
+            if (hasResult && hasType && resultType(instruction.at(2)) == 0u) at(resultTypes, instruction.at(2)) = instruction.at(1);
+            if (op == spv::OpTypeBool && !type(instruction.at(1))) at(types, instruction.at(1)) = ScalarType{1u, true};
+            if (op == spv::OpTypeInt && !type(instruction.at(1))) at(types, instruction.at(1)) = ScalarType{instruction.at(2), false};
+            if (op == spv::OpConstant && type(instruction.at(1)) && type(instruction[1])->width <= 32u && !value(instruction.at(2))) setValue(instruction.at(2), instruction.at(3));
+            if ((op == spv::OpConstantTrue || op == spv::OpConstantFalse) && !value(instruction.at(2))) setValue(instruction.at(2), op == spv::OpConstantTrue ? 1u : 0u);
             cursor += count;
         }
     }
@@ -258,7 +267,12 @@ public:
         removeDeadComputations();
         orderPhis();
         removeDeadScalarConstants();
-        std::vector<std::uint32_t> words = header;
+        std::size_t total = header.size();
+        for (const auto& constant : constants) total += constant.size();
+        for (const auto& instruction : instructions) total += instruction.size();
+        std::vector<std::uint32_t> words;
+        words.reserve(total);
+        words.insert(words.end(), header.begin(), header.end());
         bool inserted = false;
         for (const auto& instruction : instructions) {
             if (instruction.empty()) continue;
@@ -266,7 +280,7 @@ public:
                 for (const auto& constant : constants) words.insert(words.end(), constant.begin(), constant.end());
                 inserted = true;
             }
-            if ((Opcode(instruction) == spv::OpName || Opcode(instruction) == spv::OpDecorate) && removed.contains(instruction.at(1))) continue;
+            if ((Opcode(instruction) == spv::OpName || Opcode(instruction) == spv::OpDecorate) && isRemoved(instruction.at(1))) continue;
             words.insert(words.end(), instruction.begin(), instruction.end());
         }
         return words;
@@ -293,22 +307,70 @@ private:
         for (auto* collection : {&instructions, &constants}) {
             for (auto& instruction : *collection) {
                 if (!scalarConstant(instruction) || referenced.contains(Result(instruction))) continue;
-                removed.insert(Result(instruction));
+                at(removed, Result(instruction)) = 1u;
                 instruction.clear();
             }
         }
     }
 
+    struct Block {
+        std::size_t first = 0;
+        std::size_t last = 0;
+        std::size_t count = 0;
+    };
+
+    template<typename T>
+    static T& at(std::vector<T>& table, std::uint32_t id) {
+        if (id >= table.size()) table.resize(static_cast<std::size_t>(id) + 1u, T{});
+        return table[id];
+    }
+
+    template<typename T>
+    static const T* find(const std::vector<T>& table, std::uint32_t id) {
+        return id < table.size() ? &table[id] : nullptr;
+    }
+
+    const ScalarType* type(std::uint32_t id) const {
+        const auto* entry = find(types, id);
+        return entry != nullptr && entry->width != 0u ? entry : nullptr;
+    }
+
+    std::uint32_t resultType(std::uint32_t id) const {
+        const auto* entry = find(resultTypes, id);
+        return entry != nullptr ? *entry : 0u;
+    }
+
+    bool isRemoved(std::uint32_t id) const {
+        const auto* entry = find(removed, id);
+        return entry != nullptr && *entry != 0u;
+    }
+
+    void setValue(std::uint32_t id, std::uint32_t bits) {
+        at(values, id) = bits;
+        at(known, id) = 1u;
+    }
+
     std::optional<std::uint32_t> value(std::uint32_t id) const {
-        const auto found = values.find(id);
-        return found != values.end() ? std::optional(found->second) : std::nullopt;
+        const auto* flag = find(known, id);
+        return flag != nullptr && *flag != 0u ? std::optional(values[id]) : std::nullopt;
+    }
+
+    static bool stamped(const std::vector<std::uint32_t>& stamps, std::uint32_t id, std::uint32_t generation) {
+        return id < stamps.size() && stamps[id] == generation;
+    }
+
+    static bool stamp(std::vector<std::uint32_t>& stamps, std::uint32_t id, std::uint32_t generation) {
+        auto& entry = at(stamps, id);
+        if (entry == generation) return false;
+        entry = generation;
+        return true;
     }
 
     std::optional<std::uint32_t> evaluate(const Instruction& instruction) const {
         const auto op = Opcode(instruction);
         if (instruction.size() < 4u) return std::nullopt;
-        const auto type = types.find(instruction[1]);
-        if (type == types.end() || type->second.width > 32u) return std::nullopt;
+        const auto* scalar = type(instruction[1]);
+        if (scalar == nullptr || scalar->width > 32u) return std::nullopt;
         const auto left = value(instruction[3]);
         if (!left) return std::nullopt;
         if (op == spv::OpCopyObject) return left;
@@ -326,8 +388,8 @@ private:
         case spv::OpBitwiseAnd: return *left & *right;
         case spv::OpBitwiseOr: return *left | *right;
         case spv::OpBitwiseXor: return *left ^ *right;
-        case spv::OpShiftRightLogical: return *right < type->second.width ? std::optional(*left >> *right) : std::nullopt;
-        case spv::OpShiftLeftLogical: return *right < type->second.width ? std::optional(*left << *right) : std::nullopt;
+        case spv::OpShiftRightLogical: return *right < scalar->width ? std::optional(*left >> *right) : std::nullopt;
+        case spv::OpShiftLeftLogical: return *right < scalar->width ? std::optional(*left << *right) : std::nullopt;
         case spv::OpIEqual: return *left == *right;
         case spv::OpINotEqual: return *left != *right;
         case spv::OpULessThan: return *left < *right;
@@ -353,7 +415,8 @@ private:
     bool fold() {
         bool changed = false;
         bool function = false;
-        std::map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>> extracts;
+        const auto generation = ++extractGeneration;
+        const auto extracted = [&](std::uint32_t id) { return stamped(extractStamps, id, generation); };
         for (auto& instruction : instructions) {
             if (instruction.empty()) continue;
             auto op = Opcode(instruction);
@@ -373,20 +436,21 @@ private:
                 }
             }
             op = Opcode(instruction);
-            if (op == spv::OpCompositeExtract && instruction.size() == 5u) extracts.emplace(instruction[2], std::pair{instruction[3], instruction[4]});
+            if (op == spv::OpCompositeExtract && instruction.size() == 5u && stamp(extractStamps, instruction[2], generation)) {
+                at(extractSources, instruction[2]) = instruction[3];
+                at(extractChannels, instruction[2]) = instruction[4];
+            }
             if (op == spv::OpCompositeConstruct && instruction.size() == 7u) {
-                const auto first = extracts.find(instruction[3]);
-                bool shuffle = first != extracts.end();
+                bool shuffle = extracted(instruction[3]);
                 for (std::size_t index = 4; shuffle && index < instruction.size(); ++index) {
-                    const auto found = extracts.find(instruction[index]);
-                    shuffle = found != extracts.end() && found->second.first == first->second.first;
+                    shuffle = extracted(instruction[index]) && extractSources[instruction[index]] == extractSources[instruction[3]];
                 }
                 if (shuffle) {
-                    const auto source = first->second.first;
-                    bool identity = resultTypes.contains(source) && resultTypes.at(source) == instruction[1];
+                    const auto source = extractSources[instruction[3]];
+                    bool identity = resultType(source) != 0u && resultType(source) == instruction[1];
                     Instruction replacement = Make(spv::OpVectorShuffle, {instruction[1], instruction[2], source, source});
                     for (std::size_t index = 3; index < instruction.size(); ++index) {
-                        const auto channel = extracts.at(instruction[index]).second;
+                        const auto channel = extractChannels[instruction[index]];
                         replacement.push_back(channel);
                         identity &= channel == index - 3u;
                     }
@@ -397,10 +461,10 @@ private:
             }
             const auto result = evaluate(instruction);
             if (!result) continue;
-            const auto type = types.at(instruction[1]);
-            const auto bits = type.width == 32u ? *result : *result & ((1u << type.width) - 1u);
-            values[instruction[2]] = bits;
-            constants.push_back(type.boolean ? Make(bits != 0u ? spv::OpConstantTrue : spv::OpConstantFalse, {instruction[1], instruction[2]}) : Make(spv::OpConstant, {instruction[1], instruction[2], bits}));
+            const auto scalar = *type(instruction[1]);
+            const auto bits = scalar.width == 32u ? *result : *result & ((1u << scalar.width) - 1u);
+            setValue(instruction[2], bits);
+            constants.push_back(scalar.boolean ? Make(bits != 0u ? spv::OpConstantTrue : spv::OpConstantFalse, {instruction[1], instruction[2]}) : Make(spv::OpConstant, {instruction[1], instruction[2], bits}));
             instruction.clear();
             changed = true;
         }
@@ -408,31 +472,40 @@ private:
     }
 
     bool prune() {
-        std::map<std::uint32_t, std::vector<std::size_t>> blocks;
+        const auto generation = ++blockGeneration;
+        labels.clear();
         std::vector<std::uint32_t> entries;
-        std::uint32_t block = 0;
+        std::uint32_t current = 0;
         bool entry = false;
         for (std::size_t index = 0; index < instructions.size(); ++index) {
             const auto& instruction = instructions[index];
             if (instruction.empty()) continue;
             const auto op = Opcode(instruction);
             if (op == spv::OpFunction) entry = true;
-            if (op == spv::OpFunctionEnd) block = 0;
+            if (op == spv::OpFunctionEnd) current = 0;
             if (op == spv::OpLabel) {
-                block = instruction.at(1);
-                if (entry) entries.push_back(block);
+                current = instruction.at(1);
+                if (entry) entries.push_back(current);
                 entry = false;
             }
-            if (block != 0u) blocks[block].push_back(index);
+            if (current == 0u) continue;
+            if (stamp(blockStamps, current, generation)) {
+                at(blocks, current) = Block{index, index, 0u};
+                labels.push_back(current);
+            }
+            auto& range = blocks[current];
+            range.last = index;
+            ++range.count;
         }
+        std::sort(labels.begin(), labels.end());
         bool changed = false;
-        std::map<std::uint32_t, std::vector<std::uint32_t>> edges;
-        for (const auto& [label, indices] : blocks) {
-            auto& terminal = instructions[indices.back()];
+        for (const auto label : labels) {
+            const auto range = blocks[label];
+            auto& terminal = instructions[range.last];
             auto op = Opcode(terminal);
             std::uint32_t target = 0;
             bool loop = false;
-            for (const auto index : indices) loop |= Opcode(instructions[index]) == spv::OpLoopMerge;
+            for (auto index = range.first; index <= range.last; ++index) loop |= Opcode(instructions[index]) == spv::OpLoopMerge;
             if (!loop && op == spv::OpBranchConditional) {
                 if (const auto condition = value(terminal.at(1))) target = terminal.at(*condition != 0u ? 2u : 3u);
             } else if (!loop && op == spv::OpSwitch) {
@@ -443,50 +516,54 @@ private:
                 }
             }
             if (target != 0u) {
-                for (const auto index : indices) if (Opcode(instructions[index]) == spv::OpSelectionMerge) instructions[index].clear();
+                for (auto index = range.first; index <= range.last; ++index) if (Opcode(instructions[index]) == spv::OpSelectionMerge) instructions[index].clear();
                 terminal = Make(spv::OpBranch, {target});
                 op = spv::OpBranch;
                 changed = true;
             }
-            auto& successors = edges[label];
+            auto& successors = at(edges, label);
+            successors.clear();
             if (op == spv::OpBranch) successors.push_back(terminal.at(1));
             else if (op == spv::OpBranchConditional) successors = {terminal.at(2), terminal.at(3)};
             else if (op == spv::OpSwitch) {
                 successors.push_back(terminal.at(2));
-                const auto selectorType = resultTypes.find(terminal.at(1));
-                const auto stride = selectorType != resultTypes.end() && types.contains(selectorType->second) && types.at(selectorType->second).width == 64u ? 3u : 2u;
+                const auto selectorType = resultType(terminal.at(1));
+                const auto* selector = selectorType != 0u ? type(selectorType) : nullptr;
+                const auto stride = selector != nullptr && selector->width == 64u ? 3u : 2u;
                 for (std::size_t index = 3; index + stride <= terminal.size(); index += stride) successors.push_back(terminal[index + stride - 1u]);
             }
         }
-        std::set<std::uint32_t> live;
+        const auto live = ++liveGeneration;
         auto pending = entries;
         while (!pending.empty()) {
             const auto label = pending.back();
             pending.pop_back();
-            if (!blocks.contains(label)) throw std::runtime_error("prepared branch references a missing block");
-            if (!live.insert(label).second) continue;
-            const auto& successors = edges.at(label);
+            if (!stamped(blockStamps, label, generation)) throw std::runtime_error("prepared branch references a missing block");
+            if (!stamp(liveStamps, label, live)) continue;
+            const auto& successors = edges[label];
             pending.insert(pending.end(), successors.begin(), successors.end());
         }
-        for (const auto& [label, indices] : blocks) {
-            if (!live.contains(label)) {
-                if (indices.size() == 2u && Opcode(instructions[indices.back()]) == spv::OpUnreachable) continue;
-                for (std::size_t index = 1; index < indices.size(); ++index) {
-                    auto& instruction = instructions[indices[index]];
-                    if (const auto result = Result(instruction)) removed.insert(result);
+        const auto isLive = [&](std::uint32_t label) { return stamped(liveStamps, label, live); };
+        for (const auto label : labels) {
+            const auto range = blocks[label];
+            if (!isLive(label)) {
+                if (range.count == 2u && Opcode(instructions[range.last]) == spv::OpUnreachable) continue;
+                for (auto index = range.first + 1u; index <= range.last; ++index) {
+                    auto& instruction = instructions[index];
+                    if (const auto result = Result(instruction)) at(removed, result) = 1u;
                     instruction.clear();
                 }
-                instructions[indices.back()] = Make(spv::OpUnreachable, {});
+                instructions[range.last] = Make(spv::OpUnreachable, {});
                 changed = true;
                 continue;
             }
-            for (const auto index : indices) {
+            for (auto index = range.first; index <= range.last; ++index) {
                 auto& instruction = instructions[index];
                 if (instruction.empty() || Opcode(instruction) != spv::OpPhi) continue;
                 Instruction phi(instruction.begin(), instruction.begin() + 3);
                 for (std::size_t operand = 3; operand + 1u < instruction.size(); operand += 2u) {
                     const auto parent = instruction[operand + 1u];
-                    if (live.contains(parent) && std::ranges::find(edges.at(parent), label) != edges.at(parent).end()) phi.insert(phi.end(), {instruction[operand], parent});
+                    if (isLive(parent) && std::ranges::find(edges[parent], label) != edges[parent].end()) phi.insert(phi.end(), {instruction[operand], parent});
                 }
                 if (phi.size() == 3u) throw std::runtime_error("reachable prepared phi has no predecessor");
                 if (phi.size() == instruction.size() && phi.size() != 5u) continue;
@@ -500,6 +577,7 @@ private:
 
     void orderPhis() {
         std::vector<Instruction> ordered;
+        ordered.reserve(instructions.size());
         std::vector<Instruction> copies;
         bool prefix = false;
         for (auto& instruction : instructions) {
@@ -521,13 +599,23 @@ private:
     }
 
     bool propagateCopies() {
-        std::map<std::uint32_t, std::uint32_t> copies;
+        copyKeys.clear();
+        std::size_t copyCount = 0;
         for (const auto& instruction : instructions) {
             if (Opcode(instruction) != spv::OpCopyObject) continue;
             if (instruction.size() != 4u) throw std::runtime_error("invalid prepared copy instruction");
-            copies.emplace(instruction[2], instruction[3]);
+            auto& source = at(copies, instruction[2]);
+            if (source != 0u) continue;
+            source = instruction[3];
+            copyKeys.push_back(instruction[2]);
+            ++copyCount;
         }
-        if (copies.empty()) return false;
+        const auto clear = [&] {
+            for (const auto key : copyKeys) copies[key] = 0u;
+            copyKeys.clear();
+        };
+        if (copyCount == 0u) return false;
+        const auto copyOf = [&](std::uint32_t id) { return id < copies.size() ? copies[id] : 0u; };
         for (const auto& instruction : instructions) {
             if (instruction.empty()) continue;
             const auto op = Opcode(instruction);
@@ -537,14 +625,21 @@ private:
             bool hasType = false;
             spv::HasResultAndType(op, &hasResult, &hasType);
             const auto resultIndex = hasResult ? (hasType ? 2u : 1u) : 0u;
-            for (std::size_t index = 1; index < instruction.size(); ++index) if (index != resultIndex) copies.erase(instruction[index]);
+            for (std::size_t index = 1; index < instruction.size(); ++index) {
+                if (index == resultIndex || copyOf(instruction[index]) == 0u) continue;
+                copies[instruction[index]] = 0u;
+                --copyCount;
+            }
         }
-        if (copies.empty()) return false;
+        if (copyCount == 0u) {
+            clear();
+            return false;
+        }
         const auto resolve = [&](std::uint32_t id) {
             std::size_t count = 0;
-            while (copies.contains(id)) {
-                if (++count > copies.size()) throw std::runtime_error("cyclic prepared copy chain");
-                id = copies.at(id);
+            while (copyOf(id) != 0u) {
+                if (++count > copyCount) throw std::runtime_error("cyclic prepared copy chain");
+                id = copies[id];
             }
             return id;
         };
@@ -555,18 +650,21 @@ private:
             if (op == spv::OpFunction) function = true;
             if (op == spv::OpFunctionEnd) function = false;
             if (!function) continue;
-            if (op == spv::OpCopyObject && copies.contains(instruction[2])) {
-                removed.insert(instruction[2]);
+            if (op == spv::OpCopyObject && copyOf(instruction[2]) != 0u) {
+                at(removed, instruction[2]) = 1u;
                 instruction.clear();
                 continue;
             }
             VisitInputs(instruction, [&](std::size_t index) { instruction[index] = resolve(instruction[index]); });
         }
+        clear();
         return true;
     }
 
     void removeDeadComputations() {
-        std::map<std::uint32_t, std::size_t> definitions;
+        constexpr std::size_t None = static_cast<std::size_t>(-1);
+        std::vector<std::size_t> definitions(header[3], None);
+        std::vector<std::uint32_t> defined;
         std::vector<std::uint32_t> pending;
         bool function = false;
         for (std::size_t index = 0; index < instructions.size(); ++index) {
@@ -582,7 +680,12 @@ private:
                 continue;
             }
             if (PureInstruction(instruction)) {
-                definitions.emplace(Result(instruction), index);
+                const auto result = Result(instruction);
+                auto& definition = at(definitions, result);
+                if (definition == None) {
+                    definition = index;
+                    defined.push_back(result);
+                }
                 continue;
             }
             if (VisitInputs(instruction, [&](std::size_t operand) { pending.push_back(instruction[operand]); })) continue;
@@ -592,29 +695,42 @@ private:
             const auto resultIndex = hasResult ? (hasType ? 2u : 1u) : 0u;
             for (std::size_t operand = 1; operand < instruction.size(); ++operand) if (operand != resultIndex) pending.push_back(instruction[operand]);
         }
-        std::set<std::uint32_t> live;
+        const auto live = ++liveGeneration;
         while (!pending.empty()) {
             const auto id = pending.back();
             pending.pop_back();
-            const auto found = definitions.find(id);
-            if (found == definitions.end() || !live.insert(id).second) continue;
-            const auto& instruction = instructions[found->second];
+            if (id >= definitions.size() || definitions[id] == None || !stamp(liveStamps, id, live)) continue;
+            const auto& instruction = instructions[definitions[id]];
             if (!VisitInputs(instruction, [&](std::size_t operand) { pending.push_back(instruction[operand]); })) throw std::runtime_error("missing prepared pure instruction operands");
         }
-        for (const auto& [id, index] : definitions) {
-            if (live.contains(id)) continue;
-            removed.insert(id);
-            instructions[index].clear();
+        for (const auto id : defined) {
+            if (stamped(liveStamps, id, live)) continue;
+            at(removed, id) = 1u;
+            instructions[definitions[id]].clear();
         }
     }
 
     std::vector<std::uint32_t> header;
     std::vector<Instruction> instructions;
     std::vector<Instruction> constants;
-    std::map<std::uint32_t, ScalarType> types;
-    std::map<std::uint32_t, std::uint32_t> values;
-    std::map<std::uint32_t, std::uint32_t> resultTypes;
-    std::set<std::uint32_t> removed;
+    std::vector<ScalarType> types;
+    std::vector<std::uint32_t> values;
+    std::vector<std::uint8_t> known;
+    std::vector<std::uint32_t> resultTypes;
+    std::vector<std::uint8_t> removed;
+    std::vector<std::uint32_t> extractStamps;
+    std::vector<std::uint32_t> extractSources;
+    std::vector<std::uint32_t> extractChannels;
+    std::uint32_t extractGeneration = 0;
+    std::vector<Block> blocks;
+    std::vector<std::uint32_t> blockStamps;
+    std::vector<std::uint32_t> labels;
+    std::uint32_t blockGeneration = 0;
+    std::vector<std::vector<std::uint32_t>> edges;
+    std::vector<std::uint32_t> liveStamps;
+    std::uint32_t liveGeneration = 0;
+    std::vector<std::uint32_t> copies;
+    std::vector<std::uint32_t> copyKeys;
 };
 
 }

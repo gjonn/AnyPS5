@@ -17,6 +17,14 @@ int main() {
         }
         require(!controls.Apply(std::string(257, '\n')) && controls.Get() == 1);
         require(controls.Apply("merge_draw_barriers=0\nbda_table_device_local=0\n") && controls.Get() == 0);
+        require(controls.Apply("merge_draw_barriers=1\nbda_table_device_local=0\nin_place_draw_inputs=1\n") && controls.Get() == 5);
+        require(controls.Apply("merge_draw_barriers=0\nbda_table_device_local=0\n") && controls.Get() == 4);
+        for (const auto malformed : {"in_place_draw_inputs=0", "merge_draw_barriers=0\nbda_table_device_local=0\nin_place_draw_inputs=",
+            "merge_draw_barriers=0\nbda_table_device_local=0\nin_place_draw_inputs=2",
+            "merge_draw_barriers=0\nbda_table_device_local=0\nin_place_draw_inputs=0\nin_place_draw_inputs=1"}) {
+            require(!controls.Apply(malformed) && controls.Get() == 4);
+        }
+        require(controls.Apply("merge_draw_barriers=1\nbda_table_device_local=0\nin_place_draw_inputs=0\n") && controls.Get() == 1);
         std::cout << "Live controls: complete updates and malformed/partial edit rejection passed\n";
         return 0;
     } catch (const std::exception& error) {

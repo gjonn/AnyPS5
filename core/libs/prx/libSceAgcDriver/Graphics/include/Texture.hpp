@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -25,6 +26,14 @@ namespace AgcDriver::Graphics {
 class ResidentColor;
 class CommandBatch;
 class StorageTexture;
+
+inline thread_local const char* g_refreshSite = "other";
+inline std::atomic<std::uint64_t> g_traceTargetDraws{0};
+struct RefreshSiteScope {
+    explicit RefreshSiteScope(const char* site) : previous(g_refreshSite) { g_refreshSite = site; }
+    ~RefreshSiteScope() { g_refreshSite = previous; }
+    const char* previous;
+};
 struct HostImport;
 
 // The Vulkan format storage images of a guest format use (sRGB formats store as their UNORM form).
@@ -145,6 +154,7 @@ public:
     // Render targets live in the same images: draws attach mip 0 through a view of the color
     // buffer's format and mark the image dirty like a storage write.
     bool Attachable() const { return attachable; }
+    bool CubeCompatible() const { return cubeCompatible; }
     VkImageView AttachmentView(VkFormat format, std::uint32_t mip = 0, std::uint32_t depthSlice = 0, std::uint32_t layers = 1);
     VkImageView AttachmentProxyView();
     void RecordAttachmentProxyLoad(VkCommandBuffer commands, VkImageLayout attachmentLayout) const;
@@ -153,6 +163,9 @@ public:
     // Deferred write-back (APS5_EAGER_WRITEBACK=1 stores at once instead).
     void MarkDirty();
     void Flush();
+    // Debug aid (APS5_DUMP_IMAGES_AT): saves the first mip of the first layer to `path` as
+    // u32 magic 'IMG1', width, height, row pitch in bytes, VkFormat, then the rows.
+    void DumpBaseLevel(const std::string& path);
     // Stores every pending image overlapping the range, except `except`; returns whether any was.
     // Stores into host-imported memory are recorded (not waited for): a CPU reader syncs afterwards.
     // Then the unit shadows over the range are published into their imports as `scope` says (see
@@ -488,6 +501,7 @@ private:
     std::map<std::pair<std::uint32_t, bool>, VkImageView> atomicViews;
     std::map<std::pair<std::uint32_t, bool>, VkImageView> uintViews;
     bool attachable = false;
+    bool cubeCompatible = false;
     std::map<std::tuple<VkFormat, std::uint32_t, std::uint32_t, std::uint32_t>, VkImageView> attachmentViews;
     VkImage proxyImage = VK_NULL_HANDLE;
     VkDeviceMemory proxyMemory = VK_NULL_HANDLE;

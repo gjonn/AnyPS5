@@ -162,9 +162,7 @@ GuestSamplerResource DecodeSamplerResource(std::span<const std::uint32_t> words,
     const std::array compareOps{VK_COMPARE_OP_NEVER, VK_COMPARE_OP_LESS, VK_COMPARE_OP_EQUAL, VK_COMPARE_OP_LESS_OR_EQUAL, VK_COMPARE_OP_GREATER, VK_COMPARE_OP_NOT_EQUAL, VK_COMPARE_OP_GREATER_OR_EQUAL, VK_COMPARE_OP_ALWAYS};
     result.compareOp = compareOps.at(depthCompareFunc);
     if (forceUnormCoords) {
-        result.unnormalizedCoordinates = true;
-        if (clampX == 0u) result.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        if (clampY == 0u) result.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        result.unnormalizedCoordinates = clampX != 0u && clampY != 0u;
         result.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
         result.minLod = 0.0f;
         result.maxLod = 0.0f;

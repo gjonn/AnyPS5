@@ -74,12 +74,42 @@ void requireStructuredBranches(const ControlFlowGraph& graph, const char* name) 
     }
 }
 
+void requireExactPostDominators(const ControlFlowGraph& graph, const char* name) {
+    const auto count = static_cast<std::uint32_t>(graph.blocks.size());
+    const auto reachesExitAvoiding = [&](std::uint32_t from, std::uint32_t avoided) {
+        std::vector<bool> seen(count, false);
+        std::vector<std::uint32_t> stack{from};
+        seen[from] = true;
+        while (!stack.empty()) {
+            const auto id = stack.back();
+            stack.pop_back();
+            if (graph.blocks[id].successors.empty()) return true;
+            for (const auto successor : graph.blocks[id].successors) {
+                if (successor == avoided || seen[successor]) continue;
+                seen[successor] = true;
+                stack.push_back(successor);
+            }
+        }
+        return false;
+    };
+    for (const auto& block : graph.blocks) {
+        std::vector<std::uint32_t> expected;
+        for (std::uint32_t candidate = 0; candidate < count; ++candidate) {
+            if (candidate == block.id || !reachesExitAvoiding(block.id, candidate)) expected.push_back(candidate);
+        }
+        if (block.postDominators != expected) {
+            throw std::runtime_error(std::string(name) + ": block " + std::to_string(block.id) + " has " + std::to_string(block.postDominators.size()) + " post-dominators, expected " + std::to_string(expected.size()));
+        }
+    }
+}
+
 }
 
 int main() {
     try {
         auto nested = makeGraph({{1}, {2}, {5, 3}, {5, 4}, {7}, {6, 7}, {}, {1}});
         Structurizer{}.Structurize(nested);
+        requireExactPostDominators(nested, "nested selections");
         if (nested.FindBlock(2).terminator.mergeBlock == nested.FindBlock(3).terminator.mergeBlock) {
             std::fprintf(stderr, "the nested selections share merge block %u\n", nested.FindBlock(2).terminator.mergeBlock);
             return 1;
@@ -87,21 +117,27 @@ int main() {
         requireStructuredBranches(nested, "nested selections");
         auto exitTail = makeGraph({{1}, {2}, {3, 4}, {6}, {6, 5}, {1}, {}});
         Structurizer{}.Structurize(exitTail);
+        requireExactPostDominators(exitTail, "a loop exit through a tail block");
         requireStructuredBranches(exitTail, "a loop exit through a tail block");
         auto exitTails = makeGraph({{1}, {2}, {3, 4}, {7}, {5, 6}, {7, 1}, {7}, {}});
         Structurizer{}.Structurize(exitTails);
+        requireExactPostDominators(exitTails, "a loop with two exit tails");
         requireStructuredBranches(exitTails, "a loop with two exit tails");
         auto endingExits = makeGraph({{6, 1}, {2}, {3}, {6, 4}, {2, 5}, {}, {}});
         Structurizer{}.Structurize(endingExits);
+        requireExactPostDominators(endingExits, "a loop whose two exits end the program");
         requireStructuredBranches(endingExits, "a loop whose two exits end the program");
         auto threeEndingExits = makeGraph({{1}, {2}, {5, 3}, {6, 4}, {1, 7}, {}, {}, {}});
         Structurizer{}.Structurize(threeEndingExits);
+        requireExactPostDominators(threeEndingExits, "a loop whose three exits end the program");
         requireStructuredBranches(threeEndingExits, "a loop whose three exits end the program");
         auto innerEndingExit = makeGraph({{1}, {2}, {3}, {7, 4}, {2, 5}, {1, 6}, {}, {}});
         Structurizer{}.Structurize(innerEndingExit);
+        requireExactPostDominators(innerEndingExit, "an inner loop exit that ends the program");
         requireStructuredBranches(innerEndingExit, "an inner loop exit that ends the program");
         auto earlyReturn = makeGraph({{2, 1}, {4, 2}, {3, 5}, {5}, {}, {}});
         Structurizer{}.Structurize(earlyReturn);
+        requireExactPostDominators(earlyReturn, "an early return inside a selection that joins its parent's merge");
         requireStructuredBranches(earlyReturn, "an early return inside a selection that joins its parent's merge");
         for (const auto& block : earlyReturn.blocks) {
             const auto merge = block.terminator.mergeBlock;
@@ -110,6 +146,17 @@ int main() {
                 return 1;
             }
         }
+        std::vector<std::vector<std::uint32_t>> diamonds;
+        for (std::uint32_t diamond = 0; diamond < 50u; ++diamond) {
+            const auto head = diamond * 3u;
+            diamonds.push_back({head + 1u, head + 2u});
+            diamonds.push_back({head + 3u});
+            diamonds.push_back({head + 3u});
+        }
+        diamonds.push_back({});
+        auto chain = makeGraph(diamonds);
+        Structurizer{}.Structurize(chain);
+        requireExactPostDominators(chain, "a chain of fifty selections");
     } catch (const std::exception& error) {
         std::fprintf(stderr, "%s\n", error.what());
         return 1;

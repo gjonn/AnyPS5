@@ -1,6 +1,7 @@
 #include "prx/libSceAgcDriver/Execution/include/ProfileOutput.hpp"
 #include "prx/libSceAgcDriver/Execution/include/ProfileOutput.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
+#include "prx/libSceAgcDriver/Execution/include/Driver/Capture/FrameCapture.hpp"
 #include "ThreadOwned.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Diagnostics.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Draw/DrawPipeline.hpp"
@@ -280,10 +281,12 @@ void Driver::execute(const Submission& submission) {
             timed(&WorkerProfile::dispatchMs, [&] { try { dispatch(queue, packet, submission); } catch (const std::exception& error) { reportSkip("dispatch", error.what()); } });
             Graphics::Recorder::CountRecordedWork();
             finishDispatchPacket(false);
+            if (FrameReplay::WorkObserved()) FrameReplay::NoteWork(false);
         } else if (opcode == 0x16) {
             timed(&WorkerProfile::dispatchMs, [&] { try { dispatchIndirect(queue, packet, submission); } catch (const std::exception& error) { reportSkip("dispatch", error.what()); } });
             Graphics::Recorder::CountRecordedWork();
             finishDispatchPacket(true);
+            if (FrameReplay::WorkObserved()) FrameReplay::NoteWork(false);
         } else if (opcode == 0x3c || opcode == 0x93) {
             static const bool traceGpu = std::getenv("APS5_TRACE_GPU") != nullptr;
             const auto waitStart = std::chrono::steady_clock::now();
@@ -331,6 +334,10 @@ void Driver::execute(const Submission& submission) {
                 }
             });
             finishDrawPacket(drawn);
+            if (FrameReplay::WorkObserved()) {
+                if (pipelined && DrawPipeline::Queue0().Busy()) DrawPipeline::Queue0().Drain(DrawPipeline::DrainReason::Packet, opcode);
+                FrameReplay::NoteWork(true);
+            }
         } else if (opcode == 0x22) {
             recordQueuedLabelsBeforeRead(submission.queue);
             const auto condition = Pm4::ReadCondition(packet);

@@ -701,7 +701,7 @@ std::string RequestSerializer::Serialize(const RecompileRequest& request) const 
     std::string buffer;
     Writer writer(buffer);
     writer.WriteU32(0x41505335u);
-    writer.WriteU32(12u);
+    writer.WriteU32(15u);
     writeShaderBinary(writer, request.shader);
     writeGuestContext(writer, request.context);
     writeSpirvTarget(writer, request.target);
@@ -720,6 +720,22 @@ std::string RequestSerializer::Serialize(const RecompileRequest& request) const 
     writer.WriteU32(request.target.srgbDecodeFormats);
     if (request.context.compute.has_value()) writer.WriteU32(request.context.compute->scratchDwords);
     writer.WriteBool(request.target.narrowSubgroupClock);
+    if (request.context.pixel) {
+        writer.WriteU32(request.context.pixel->reversedBlend);
+        for (const auto packing : request.context.pixel->targetExportPacking) writer.WriteU32(static_cast<std::uint32_t>(packing));
+    }
+    const auto writeCalls = [&](std::span<const CapturedShaderCall> calls) {
+        writer.WriteU32(static_cast<std::uint32_t>(calls.size()));
+        for (const auto& call : calls) {
+            writer.WriteU32(call.callProgramCounter);
+            writer.WriteU32(call.targetProgramCounter);
+            writer.WriteU32(call.returnProgramCounter);
+            writer.WriteU64(call.targetAddress);
+            writer.WriteU32(call.userDataIndex);
+        }
+    };
+    writeCalls(request.shader.capturedCalls);
+    if (request.graphics) for (const auto& program : request.graphics->linkedPrograms) writeCalls(program.binary.capturedCalls);
     return base64Encode(buffer);
 }
 
@@ -728,7 +744,7 @@ DeserializedRequest RequestSerializer::Deserialize(std::string_view text) const 
     Reader reader(decoded);
     if (reader.ReadU32() != 0x41505335u) throw std::runtime_error("invalid recompile request signature");
     const auto version = reader.ReadU32();
-    if (version < 1u || version > 12u) throw std::runtime_error("unsupported recompile request serialization version");
+    if (version < 1u || version > 15u) throw std::runtime_error("unsupported recompile request serialization version");
     DeserializedRequest result{};
     result.request.shader = readShaderBinary(reader, result.shaderCode, result.shaderHeader);
     result.request.context = readGuestContext(reader, result, version);
@@ -748,6 +764,38 @@ DeserializedRequest RequestSerializer::Deserialize(std::string_view text) const 
     if (version >= 9u) result.request.target.srgbDecodeFormats = reader.ReadU32();
     if (version >= 10u && result.request.context.compute.has_value()) result.request.context.compute->scratchDwords = reader.ReadU32();
     if (version >= 12u) result.request.target.narrowSubgroupClock = reader.ReadBool();
+    if (version >= 13u && result.request.context.pixel) result.request.context.pixel->reversedBlend = reader.ReadU32();
+    if (version >= 14u && result.request.context.pixel) {
+        for (auto& packing : result.request.context.pixel->targetExportPacking) {
+            const auto value = reader.ReadU32();
+            if (value > static_cast<std::uint32_t>(ColorExportPacking::Float11_11_10)) throw std::runtime_error("invalid serialized color packing");
+            packing = static_cast<ColorExportPacking>(value);
+        }
+    }
+    if (version >= 15u) {
+        const auto readCalls = [&](std::vector<CapturedShaderCall>& calls) {
+            const auto count = reader.ReadU32();
+            if (count > MaxCapturedShaderCalls) throw std::runtime_error("RequestSerializer: too many captured scalar calls");
+            for (std::uint32_t index = 0; index < count; ++index) {
+                CapturedShaderCall call;
+                call.callProgramCounter = reader.ReadU32();
+                call.targetProgramCounter = reader.ReadU32();
+                call.returnProgramCounter = reader.ReadU32();
+                call.targetAddress = reader.ReadU64();
+                call.userDataIndex = reader.ReadU32();
+                calls.push_back(call);
+            }
+        };
+        readCalls(result.calls);
+        result.request.shader.capturedCalls = result.calls;
+        if (result.graphicsStorage) {
+            for (std::size_t index = 0; index < result.graphicsStorage->linkedPrograms.size(); ++index) {
+                auto& calls = result.graphicsStorage->linkedProgramStorage[index].calls;
+                readCalls(calls);
+                result.graphicsStorage->linkedPrograms[index].binary.capturedCalls = calls;
+            }
+        }
+    }
     return result;
 }
 

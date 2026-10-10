@@ -26,5 +26,10 @@ int DoMunmap(void* addr, size_t len);
 int DoReserveVirtual(void** addr, size_t len, int flags, size_t alignment);
 bool GuestProtection(uintptr_t addr, int* prot);
 bool GuestReservation(std::uintptr_t addr, std::uintptr_t* start, std::uintptr_t* end);
+// Every mapped guest range with its SCE protection (GPU access is 0x30), in address order.
+extern "C" void KernelProtectedRanges_nid_postfix(void (*emit)(void* context, std::uintptr_t begin, std::uintptr_t end, int prot), void* context);
+// Every direct-memory mapping with the backing object and byte offset its pages come from: two
+// guest ranges with the same backing and overlapping offsets alias each other.
+extern "C" void KernelDirectMappings_nid_postfix(void (*emit)(void* context, std::uintptr_t begin, std::uintptr_t end, std::uint64_t backing, std::uint64_t offset), void* context);
 
 #endif

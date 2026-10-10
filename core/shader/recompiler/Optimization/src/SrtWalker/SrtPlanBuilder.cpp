@@ -43,29 +43,51 @@ void PlanBuilder::Run() {
     PatchReads();
 }
 
-void PlanBuilder::Collect(IrValue* raw, std::uint32_t usePc) {
-    IrValue* value = raw->Resolve();
+bool PlanBuilder::Enter(IrValue* value, std::uint32_t usePc) {
     if (value->Opcode() == IrOpcode::Void) {
-        return;
+        return false;
     }
-    IrValue* inst = value;
-    const auto cycle = std::find(_visiting.begin(), _visiting.end(), inst);
-    if (cycle != _visiting.end()) {
+    if (_visitingSet.contains(value)) {
+        const auto cycle = std::find(_visiting.begin(), _visiting.end(), value);
         const auto containsPhi = std::any_of(cycle, _visiting.end(), [](IrValue* candidate) { return candidate->Opcode() == IrOpcode::Phi; });
         if (containsPhi) {
-            return;
+            return false;
         }
-        Fail(_program.Resources(), usePc, "cyclic typed planning value " + std::string(IrOpcodeName(inst->Opcode())) + " without a phi");
+        Fail(_program.Resources(), usePc, "cyclic typed planning value " + std::string(IrOpcodeName(value->Opcode())) + " without a phi");
     }
-    if (std::find(_visited.begin(), _visited.end(), inst) != _visited.end()) {
-        return;
+    if (_visited.contains(value)) {
+        return false;
     }
-    _visiting.push_back(inst);
-    for (std::size_t index = 0; index < inst->ArgumentCount(); index++) {
-        Collect(inst->Argument(index), usePc);
+    _visiting.push_back(value);
+    _visitingSet.insert(value);
+    return true;
+}
+
+void PlanBuilder::Collect(IrValue* raw, std::uint32_t usePc) {
+    struct Frame {
+        IrValue* inst;
+        std::size_t next;
+    };
+    std::vector<Frame> stack;
+    if (IrValue* start = raw->Resolve(); Enter(start, usePc)) stack.push_back({start, 0});
+    while (!stack.empty()) {
+        auto& frame = stack.back();
+        if (frame.next < frame.inst->ArgumentCount()) {
+            IrValue* argument = frame.inst->Argument(frame.next++)->Resolve();
+            if (Enter(argument, usePc)) stack.push_back({argument, 0});
+            continue;
+        }
+        IrValue* inst = frame.inst;
+        stack.pop_back();
+        _visiting.pop_back();
+        _visitingSet.erase(inst);
+        _visited.insert(inst);
+        Finish(inst);
     }
-    _visiting.pop_back();
-    _visited.push_back(inst);
+}
+
+void PlanBuilder::Finish(IrValue* inst) {
+    IrValue* value = inst;
     if (!IsRawRead(_program.Resources(), *inst)) {
         return;
     }

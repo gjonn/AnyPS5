@@ -138,7 +138,9 @@ inline std::size_t VertexBufferExtent(const ShaderRecompiler::VertexAttribute& a
 inline std::optional<std::size_t> ShortRawVertexBufferBytes(const ShaderRecompiler::VertexAttribute& attribute) {
     const auto stride = (attribute.resource.fields[1] >> 16u) & 0x3fffu;
     const auto records = attribute.resource.fields[2];
-    if (stride != 0 || records >= DecodeVertexFormat(attribute).bytes) return std::nullopt;
+    const auto bytes = DecodeVertexFormat(attribute).bytes;
+    if (stride != 0 || records >= bytes) return std::nullopt;
+    if (((attribute.resource.fields[3] >> 28u) & 3u) == 2u) return static_cast<std::size_t>(bytes);
     return static_cast<std::size_t>(records & ~3u);
 }
 
@@ -171,6 +173,7 @@ struct VertexCopyPlan {
     std::vector<std::pair<std::uint64_t, std::uint64_t>> copies;
     std::vector<std::size_t> copyOf;
     std::vector<std::uint64_t> offsets;
+    std::vector<std::uint32_t> alignments;
 };
 
 inline VertexCopyPlan PlanVertexCopies(std::span<const VertexFetch> fetches) {
@@ -194,7 +197,9 @@ inline VertexCopyPlan PlanVertexCopies(std::span<const VertexFetch> fetches) {
         if (!joins) {
             lead = i;
             plan.copies.emplace_back(fetch.begin, fetch.end);
+            plan.alignments.push_back(fetch.alignment);
         }
+        plan.alignments.back() = std::max(plan.alignments.back(), fetch.alignment);
         auto& copy = plan.copies.back();
         copy.second = std::max(copy.second, fetch.end);
         plan.copyOf[i] = plan.copies.size() - 1;

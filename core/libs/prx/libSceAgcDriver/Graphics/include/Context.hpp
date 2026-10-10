@@ -123,6 +123,7 @@ struct Context {
     bool drawIndirectCount = false;
     bool occlusionQueryPrecise = false;
     bool depthBounds = false;
+    bool dualSrcBlend = false;
     bool depthBiasClamp = false;
     bool samplerFilterMinmax = false;
     bool nullDescriptor = false;

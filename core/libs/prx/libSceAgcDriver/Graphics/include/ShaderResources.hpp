@@ -13,6 +13,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -25,6 +26,8 @@ namespace AgcDriver::Graphics {
 class Recorder;
 
 void FlushCachedTextures(VkDevice device);
+// Debug aid: every cached storage image's first mip into `directory` (see StorageTexture::DumpBaseLevel).
+std::size_t DumpCachedStorageImages(VkDevice device, const std::string& directory, std::span<const std::uint64_t> addresses = {}, std::optional<std::uint32_t> minimumWidth = {});
 void ClearCachedTextures(VkDevice device);
 struct LookupMemoCounts {
     std::uint64_t hits;

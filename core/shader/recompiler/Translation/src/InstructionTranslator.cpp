@@ -90,6 +90,29 @@ bool isCodeTableLoad(const ControlFlowGraph& cfg, std::uint32_t programCounter) 
     return std::find(cfg.codeTableLoadProgramCounters.begin(), cfg.codeTableLoadProgramCounters.end(), programCounter) != cfg.codeTableLoadProgramCounters.end();
 }
 
+void translateExternalFetch(TranslationContext& context, const RdnaInstruction& call, const ShaderVertexInputInfo* input) {
+    if (input == nullptr || input->resourcesNum <= 0) {
+        throw std::runtime_error("s_swappc_b64 fetch-shader call at program counter " + std::to_string(call.programCounter) + " has no parsed fetch-shader plan to inline");
+    }
+    for (int index = 0; index < input->resourcesNum && index < ShaderVertexInputInfo::MaxResources; ++index) {
+        const auto& destination = input->resourcesDst[index];
+        if (destination.attrId < 0 || destination.registersNum <= 0) {
+            continue;
+        }
+        if (destination.registersNum > 4 || destination.registerStart < 0) {
+            throw std::runtime_error("external fetch-shader attribute " + std::to_string(destination.attrId) + " writes " + std::to_string(destination.registersNum) +
+                " registers starting at " + std::to_string(destination.registerStart) + "; the inline model supports one to four");
+        }
+        RdnaInstruction fetch{};
+        fetch.op = RdnaOpcode::BufferLoadFormatXyzw;
+        fetch.programCounter = call.programCounter;
+        fetch.destination.kind = RdnaOperandKind::VectorRegister;
+        fetch.destination.reg = static_cast<std::uint32_t>(destination.registerStart);
+        fetch.formatted = true;
+        context.TranslateEmbeddedFetch(fetch, static_cast<std::uint32_t>(index), static_cast<std::uint32_t>(destination.registersNum));
+    }
+}
+
 void includeInstructionVectorRegisters(const RdnaInstruction& instruction, std::uint32_t& vectorLimit) {
     const auto includeVector = [&vectorLimit](const RdnaOperand& operand, std::uint32_t count = 1u) {
         if (operand.kind == RdnaOperandKind::VectorRegister) {
@@ -431,6 +454,9 @@ IrProgram InstructionTranslator::Translate(const RdnaProgram& decoded, const Con
                 }
             }
             context.TranslateInstruction(instruction);
+            if (cfg.hasFetchCall && instruction.programCounter == cfg.fetchCallProgramCounter) {
+                translateExternalFetch(context, instruction, options.inputInfo.vertex);
+            }
         }
         context.AddBranchCondition(cfgBlock, blockInfos[typedIndex]);
     }

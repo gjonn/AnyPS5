@@ -2,12 +2,14 @@
 #include "prx/libSceAgcDriver/Execution/include/PerformanceTimer.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Queues/Submission.hpp"
+#include "prx/libSceAgcDriver/Execution/include/Driver/Capture/FrameCapture.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Diagnostics.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Synchronization/SynchronizationStatistics.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Pm4.hpp"
 #include "ThreadOwned.hpp"
 #include <bit>
+#include <optional>
 #include <cstdlib>
 #ifdef _WIN32
 #include <windows.h>
@@ -52,6 +54,7 @@ void Driver::copyCommands(Submission& submission, const std::uint32_t* guest, st
 bool Driver::copySegment(Submission& submission, const std::uint32_t* guest, std::size_t words, std::size_t& budget) {
     require(words <= budget, "command buffer jumps exceed the copy limit (a jump loop?)");
     budget -= words;
+    if (auto* segments = FrameCapture::Segments()) segments->emplace_back(reinterpret_cast<std::uintptr_t>(guest), words * sizeof(std::uint32_t));
     std::vector<std::pair<std::size_t, std::size_t>> guarded;
     const auto reach = [&](std::size_t cursor, std::size_t next) {
         std::erase_if(guarded, [&](const auto& range) {
@@ -249,6 +252,14 @@ void Driver::Submit(const Packet* packet, std::uint32_t queue) {
     GuestMemory::CheckRange(packet, sizeof(Packet), alignof(Packet));
     const auto descriptor = *packet;
     require(descriptor.flags == 0, "nonzero submission flags are not implemented");
+    auto entered = FrameCapture::Enter(*this);
+    std::vector<std::pair<std::uint64_t, std::size_t>> segments;
+    struct SegmentScope {
+        explicit SegmentScope(std::vector<std::pair<std::uint64_t, std::size_t>>* segments) { FrameCapture::Segments() = segments; }
+        ~SegmentScope() { FrameCapture::Segments() = nullptr; }
+    };
+    std::optional<SegmentScope> segmentScope;
+    if (entered.owns_lock()) segmentScope.emplace(&segments);
     Submission submission{};
     submission.queue = queue;
     submission.receivedAt = receivedAt;
@@ -264,17 +275,21 @@ void Driver::Submit(const Packet* packet, std::uint32_t queue) {
     if (APS5_ENABLE_TIMING_LOG) submission.copiedAt = std::chrono::steady_clock::now();
     validate(submission, descriptor.addr);
     readRegisterLists(submission);
+    segmentScope.reset();
+    if (entered.owns_lock()) FrameCapture::RecordSubmit(queue, reinterpret_cast<std::uintptr_t>(descriptor.addr), descriptor.dw_num, submission.commands, segments);
     if (APS5_ENABLE_TIMING_LOG) submission.validatedAt = std::chrono::steady_clock::now();
     waitForFlipRoom(submission);
     if (APS5_ENABLE_TIMING_LOG) submission.roomReadyAt = std::chrono::steady_clock::now();
     if (trace) AgcDriver::ProfilePrint_nid_no_patch("[gpu] %.1f submit queue=0x%x dwords=%zu at %p\n", TraceMs(), queue, submission.commands.size(), static_cast<const void*>(descriptor.addr));
     const auto validated = profile ? std::chrono::steady_clock::now() : start;
+    bool flipped = false;
     {
         std::lock_guard lock(mutex);
         rethrowFailure();
         checkStopping();
         require(accepted != std::numeric_limits<std::uint64_t>::max(), "submission serial overflow");
         reserveOutputs(submission);
+        flipped = !submission.flips.empty();
         submission.shaders = shaders;
         submission.serial = accepted + 1;
 
@@ -291,12 +306,15 @@ void Driver::Submit(const Packet* packet, std::uint32_t queue) {
         ++accepted;
     }
     changed.notify_all();
+    if (FrameCapture::Enabled()) FrameCapture::Submitted(*this, flipped, entered);
     if (trace) AgcDriver::ProfilePrint_nid_no_patch("[submit-return] %.1f tid %lu queue=0x%x elapsed %.3f ms\n", TraceMs(), traceThread, queue, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - traceEntry).count());
 }
 
 void Driver::SuspendPoint() {
     const auto receivedAt = APS5_ENABLE_TIMING_LOG ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     require(!onWorkerThread(), "worker cannot suspend itself");
+    const auto entered = FrameCapture::Enter(*this);
+    if (entered.owns_lock()) FrameCapture::RecordSuspend();
     std::unique_lock lock(mutex);
     rethrowFailure();
     checkStopping();

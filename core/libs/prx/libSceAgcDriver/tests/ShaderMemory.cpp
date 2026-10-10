@@ -905,8 +905,19 @@ void verifyPixelRequestSerialization() {
     const RequestSerializer serializer;
     for (const auto& mapping : mappings) {
         pixel.targetExportMapping = mapping;
+        pixel.reversedBlend = 0x80018c41u;
+        pixel.targetExportPacking[0] = ColorExportPacking::Float11_11_10;
         request.context.pixel = pixel;
         const auto replay = serializer.Deserialize(serializer.Serialize(request));
+        require(replay.request.context.pixel->reversedBlend == pixel.reversedBlend, "reversed blend flags were lost in replay");
+        require(replay.request.context.pixel->targetExportPacking == pixel.targetExportPacking, "export packing was lost in replay");
+        auto ordinary = request;
+        ordinary.context.pixel->reversedBlend = 0;
+        std::vector<std::uint64_t> blendedKey, ordinaryKey;
+        BuildPreparedShaderKey(request, blendedKey);
+        BuildPreparedShaderKey(ordinary, ordinaryKey);
+        require(blendedKey != ordinaryKey, "reversed blending aliases ordinary prepared shader identity");
+
         require(replay.request.context.pixel.has_value() && fields(*replay.request.context.pixel) == fields(pixel), "pixel fields or export mappings were lost in serialization");
         require(replay.request.context.vertex.has_value() && replay.request.context.vertex->fetchAttribReg == 17u && replay.request.context.memory.size() == 1u && replay.request.context.memory[0].guestAddress == 0x60000u && replay.request.context.memory[0].bytes.size() == sizeof(userData), "pixel mappings displaced the following guest context");
         require(replay.request.target.subgroupSize == 64u && replay.request.target.nonConstantImageOffsets && replay.request.layout.firstBinding == 11u && replay.request.layout.pushConstantOffsetBytes == 16u && !replay.request.useCache, "pixel mappings displaced the following request fields");
@@ -932,12 +943,12 @@ void verifyPixelRequestSerialization() {
     minimal.context.waveSize = 64;
     minimal.context.pixel = ShaderPixelStageInfo{};
     const auto encoded = serializer.Serialize(minimal);
-    require(requestPrefix(encoded, 8u) == "NVNQQQwAAAA=", "new requests did not use serialization version 12");
+    require(requestPrefix(encoded, 8u) == "NVNQQQ8AAAA=", "new requests did not use serialization version 15");
     constexpr std::size_t mappingOffset = 8u + 37u + 18u + 163u;
     for (std::size_t bytes = 0; bytes < 8u; ++bytes) {
         expectFailure([&] { static_cast<void>(serializer.Deserialize(requestPrefix(encoded, mappingOffset + bytes))); }, "truncated data", "a truncated version-12 pixel mapping was accepted");
     }
-    for (const auto unsupported : {"NVNQQQAAAAA=", "NVNQQQ0AAAA="}) {
+    for (const auto unsupported : {"NVNQQQAAAAA=", "NVNQQRAAAAA="}) {
         expectFailure([&] { static_cast<void>(serializer.Deserialize(unsupported)); }, "serialization version", "an unsupported request version was accepted");
     }
 }
@@ -1381,7 +1392,10 @@ void verifyUnnormalizedSamplers() {
     auditSpirv(accepted.spirv.Words());
     const auto plain = recompile(lz, userData(normalized), 0x40000u);
     require(proven(plain, false), "unnormalized samplers: a normalized S# was flagged");
-    require(plain.variantId == accepted.variantId && plain.spirv.Words() == accepted.spirv.Words(), "unnormalized samplers: the unnormalized S# compiled another variant");
+    require(plain.variantId == accepted.variantId, "unnormalized samplers: the unnormalized S# compiled another variant");
+    require(plain.PipelineVariantId() != accepted.PipelineVariantId(), "unnormalized samplers: distinct coordinate modes alias a pipeline");
+    const auto repeated = recompile(lz, userData(unnormalized), 0x40000u);
+    require(repeated.variantId == accepted.variantId && repeated.PipelineVariantId() == accepted.PipelineVariantId() && repeated.spirv.Words() == accepted.spirv.Words(), "unnormalized samplers: repeated coordinate mode did not reuse its specialized module");
 
     for (const std::uint32_t mimg : {0xf0900f08u, 0xf0800f08u, 0xf0940f08u, 0xf0840f08u}) {
         const auto result = recompile(program(mimg), userData(unnormalized));
@@ -1395,7 +1409,9 @@ void verifyUnnormalizedSamplers() {
     reject(0xf0bc0f08u, imageData(unnormalized, Type2D, Format32Float, 0u), "unnormalized guest sampler is used with depth comparison, which is not implemented", "unnormalized samplers: image_sample_c_lz was accepted");
     reject(0xf11c0108u, userData(unnormalized), "unnormalized guest sampler is used by a gather, which is not implemented", "unnormalized samplers: image_gather4_lz was accepted");
     reject(0xf1800308u, userData(unnormalized), "unnormalized guest sampler is used by image_get_lod, which is not implemented", "unnormalized samplers: image_get_lod was accepted");
-    reject(0xf0880f08u, userData(unnormalized), "unnormalized guest sampler is used by a sample with derivatives, which is not implemented", "unnormalized samplers: image_sample_d was accepted");
+    const auto gradient = recompile(program(0xf0880f08u), userData(unnormalized));
+    require(proven(gradient, true), "unnormalized samplers: derivative sampling lost coordinate-mode flags");
+    auditSpirv(gradient.spirv.Words());
     reject(0xf0800f09u, userData(unnormalized), "unnormalized guest sampler is used by an image_sample_*_a variant, which is not implemented", "unnormalized samplers: image_sample_a was accepted");
     reject(0xf09c0f18u, imageData(unnormalized, TypeCube, Format8888UNorm, 5u), "unnormalized guest sampler samples a 1D-array, 2D-array, 3D, cube or multisampled image", "unnormalized samplers: a cube T# was accepted");
     reject(0xf09c0f10u, imageData(unnormalized, Type3D, Format8888UNorm, 3u), "unnormalized guest sampler samples a 1D-array, 2D-array, 3D, cube or multisampled image", "unnormalized samplers: a 3D T# was accepted");
@@ -1417,16 +1433,56 @@ void verifyUnnormalizedSamplers() {
         std::vector<std::uint32_t> exact;
         std::vector<std::uint32_t> sums;
         std::vector<std::uint32_t> coordinates;
+        std::map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>> selects;
+        std::map<std::uint32_t, std::uint32_t> quotients;
+        std::map<std::uint32_t, std::uint32_t> copies;
+        std::map<std::uint32_t, std::uint32_t> floors;
+        std::map<std::uint32_t, std::uint32_t> addends;
         for (std::size_t cursor = 5; cursor < words.size();) {
             const auto count = words[cursor] >> 16u;
             require(count != 0 && count <= words.size() - cursor, "unnormalized texel offsets: truncated SPIR-V instruction");
             const auto op = words[cursor] & 0xffffu;
             if (op == spv::OpDecorate && count == 3u && words[cursor + 2] == spv::DecorationNoContraction) exact.push_back(words[cursor + 1]);
-            if (op == spv::OpFAdd) sums.push_back(words[cursor + 2]);
+            if (op == spv::OpFAdd) {
+                sums.push_back(words[cursor + 2]);
+                addends[words[cursor + 2]] = words[cursor + 3];
+            }
+            if (op == spv::OpExtInst && count == 6u && words[cursor + 4] == 8u) floors[words[cursor + 2]] = words[cursor + 5];
+            if (op == spv::OpSelect && count == 6u) selects[words[cursor + 2]] = {words[cursor + 4], words[cursor + 5]};
+            if (op == spv::OpFDiv && count == 5u) quotients[words[cursor + 2]] = words[cursor + 3];
+            if (op == spv::OpCopyObject && count == 4u) copies[words[cursor + 2]] = words[cursor + 3];
             if (op == spv::OpImageSampleExplicitLod) coordinates.push_back(words[cursor + 4]);
             cursor += count;
         }
-        return !coordinates.empty() && std::ranges::all_of(coordinates, [&](std::uint32_t id) { return std::ranges::count(sums, id) != 0 && std::ranges::count(exact, id) != 0; });
+        const auto exactSum = [&](std::uint32_t id) { return std::ranges::count(sums, id) != 0 && std::ranges::count(exact, id) != 0; };
+        const auto centredSum = [&](std::uint32_t id) {
+            const auto addend = addends.find(id);
+            if (addend == addends.end()) return false;
+            const auto floor = floors.find(addend->second);
+            return floor != floors.end() && exactSum(floor->second);
+        };
+        const auto folded = [&](std::uint32_t id) {
+            for (auto copy = copies.find(id); copy != copies.end(); copy = copies.find(id)) id = copy->second;
+            if (exactSum(id)) return true;
+            if (const auto quotient = quotients.find(id); quotient != quotients.end()) return exactSum(quotient->second) || centredSum(quotient->second);
+            const auto select = selects.find(id);
+            if (select == selects.end()) return false;
+            const auto [normalized, texels] = select->second;
+            if (!exactSum(texels)) return false;
+            const auto quotientOf = [&](std::uint32_t value) {
+                const auto quotient = quotients.find(value);
+                if (quotient == quotients.end()) return false;
+                if (quotient->second == texels) return true;
+                const auto addend = addends.find(quotient->second);
+                if (addend == addends.end()) return false;
+                const auto floor = floors.find(addend->second);
+                return floor != floors.end() && floor->second == texels;
+            };
+            if (quotientOf(normalized)) return true;
+            const auto modes = selects.find(normalized);
+            return modes != selects.end() && quotientOf(modes->second.first) && quotientOf(modes->second.second);
+        };
+        return !coordinates.empty() && std::ranges::all_of(coordinates, folded);
     };
     const auto sampleMasks = [](const std::vector<std::uint32_t>& words) {
         std::vector<std::uint32_t> masks;
@@ -1450,7 +1506,7 @@ void verifyUnnormalizedSamplers() {
     auditSpirv(foldedLz.spirv.Words());
     require(foldedSamples(foldedLz.spirv.Words()), "unnormalized texel offsets: a constant offset was not added to the coordinates");
     const auto operandLz = recompile(constantLz, userData(normalized), 0x48000u);
-    require(proven(operandLz, false) && operandLz.variantId != foldedLz.variantId, "unnormalized texel offsets: a normalized S# shared the variant that folds offsets");
+    require(proven(operandLz, false) && operandLz.variantId == foldedLz.variantId && operandLz.PipelineVariantId() != foldedLz.PipelineVariantId(), "unnormalized texel offsets: coordinate modes do not share source while keeping distinct specialized pipelines");
     require(sampleMasks(operandLz.spirv.Words()) == std::vector<std::uint32_t>{spv::ImageOperandsLodMask | spv::ImageOperandsConstOffsetMask} && !foldedSamples(operandLz.spirv.Words()), "unnormalized texel offsets: a normalized image_sample_lz_o lost its ConstOffset operand");
     require(recompile(constantLz, userData(unnormalized), 0x48000u).variantId == foldedLz.variantId, "unnormalized texel offsets: the unnormalized S# did not reuse its variant");
     for (const std::uint32_t mimg : {0xf0dc0f08u, 0xf0d00f08u, 0xf0c00f08u, 0xf0d40f08u, 0xf0c40f08u}) {
@@ -1477,7 +1533,9 @@ void verifyUnnormalizedSamplers() {
     pixel.target.subgroupSize = 64;
     pixel.layout.pushConstantSizeBytes = 128;
     pixel.useCache = false;
-    expectFailure([&] { static_cast<void>(Recompile(pixel)); }, "unnormalized guest sampler is used by an implicit-LOD sample, which is not implemented", "unnormalized samplers: a pixel image_sample was accepted");
+    const auto pixelResult = Recompile(pixel);
+    require(proven(pixelResult, true), "unnormalized samplers: pixel sampling lost coordinate-mode flags");
+    auditSpirv(pixelResult.spirv.Words());
 }
 
 void verifyUnusedUnnormalizedSampler() {
@@ -1495,7 +1553,7 @@ void verifyUnusedUnnormalizedSampler() {
     snapshot.images = {DescriptorValue{{0x00001000u, 0x03800000u, 0x0000c000u, 0x90000facu, 0u, 0u, 0u, 0u}, 8u}};
     snapshot.samplers = {DescriptorValue{{0x00008092u, 0x00fff000u, 0x05500000u, 0u}, 4u}};
     const auto populate = [&](ShaderInfo shader) {
-        shader.runtimeImageModes = {ResourceMaterializer::RuntimeImageModes(shader.images[0])};
+        ResourceMaterializer::PrepareImageModes(shader);
         BindingAllocationResult allocation;
         allocation.layout.descriptors = {{DescriptorBindingForImage(shader.images[0]), {0u}}, {DescriptorBindingKind::Samplers, {0u}}};
         DescriptorBindingBuilder{}.Populate(allocation, shader, IrShaderStage::Compute, 0u, snapshot, {});
@@ -1511,14 +1569,27 @@ void verifyUnusedUnnormalizedSampler() {
     expectFailure([&] { static_cast<void>(populate(compared)); }, "unnormalized guest sampler is used with depth comparison, which is not implemented", "unnormalized samplers: a depth-compare S# without live uses was accepted");
     auto offset = info;
     offset.samplers[0].uses = SamplerUseExplicitLod | SamplerUseOffset;
-    expectFailure([&] { static_cast<void>(populate(offset)); }, "unnormalized guest sampler is used with a texel offset, which is not implemented", "unnormalized samplers: an offset use without folded offsets was accepted");
-    offset.samplers[0].foldTexelOffsets = true;
     const auto folded = populate(offset);
     require(folded[0].imageUnnormalized == std::vector<bool>{true} && folded[1].samplerUnnormalized == std::vector<bool>{true}, "unnormalized samplers: an offset use with folded offsets was not flagged");
     snapshot.samplers[0].dwords[0] = 0x00000092u;
     const auto normalized = populate(info);
     require(normalized[0].imageUnnormalized == std::vector<bool>{false} && normalized[1].samplerUnnormalized == std::vector<bool>{false}, "unnormalized samplers: a normalized S# was flagged");
-    expectFailure([&] { static_cast<void>(populate(offset)); }, "guest sampler without FORCE_UNNORMALIZED is bound to a variant that adds its texel offsets to the coordinates", "unnormalized samplers: a normalized S# was bound to a variant that folds offsets");
+    const auto normalizedOffsets = populate(offset);
+    require(normalizedOffsets[0].imageUnnormalized == std::vector<bool>{false} && normalizedOffsets[1].samplerUnnormalized == std::vector<bool>{false}, "unnormalized samplers: normalized offsets retained pixel-coordinate flags");
+    offset.images[0].emulatedCompare |= EmulatedCompare::NativeOffsetUnsupported;
+    expectFailure([&] { static_cast<void>(populate(offset)); }, "texel offset that is not a constant", "unnormalized samplers: unsupported native normalized offsets were accepted");
+    snapshot.samplers[0].dwords[0] |= 1u << 15u;
+    const auto requiredFolded = populate(offset);
+    require(requiredFolded[0].imageUnnormalized == std::vector<bool>{true}, "unnormalized samplers: computed offsets did not select pixel coordinates");
+    snapshot.samplers[0].dwords[0] &= ~(1u << 15u);
+    auto table = offset;
+    table.images.push_back(table.images[0]);
+    table.images[0].indirectRoot = 0u;
+    table.images[0].indirectResources = {0u, 1u};
+    table.images[1].indirectRoot = 0u;
+    snapshot.images.push_back(snapshot.images[0]);
+    snapshot.images[0].dwords[3] &= ~0xfffu;
+    expectFailure([&] { static_cast<void>(populate(table)); }, "texel offset that is not a constant", "unnormalized samplers: a constant table root bypassed offset validation for a native table slot");
 }
 
 void verifyWaveUniformValues() {
@@ -1832,9 +1903,46 @@ void verifyFunctionLdsBound() {
 int main(int argc, char** argv) {
     try {
         using namespace ShaderRecompiler;
+        if (argc == 2 && std::string_view(argv[1]) == "--unnormalized") {
+            verifyComputedTexelOffsets();
+            verifyUnnormalizedSamplers();
+            verifyUnusedUnnormalizedSampler();
+            std::cout << "Sampler coordinate modes and computed texel offsets passed\n";
+            return 0;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--bindless") {
             verifyBindlessTable();
             std::cout << "Bindless mapping, indexing capabilities and strict validation passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--reversed-blend-replay") {
+            const std::array<std::uint32_t, 1> code{0xbf810000u};
+            RecompileRequest request{};
+            request.shader = {ShaderStage::Fragment, 0x30000u, code, 0, {}};
+            request.context.waveSize = 64;
+            request.context.pixel = ShaderPixelStageInfo{};
+            for (const auto flags : {0u, 0x80018c41u, 0x80000001u}) {
+                request.context.pixel->reversedBlend = flags;
+                const auto replay = RequestSerializer{}.Deserialize(RequestSerializer{}.Serialize(request));
+                require(replay.request.context.pixel->reversedBlend == flags, "blend flags lost in replay");
+                std::vector<std::uint64_t> key, replayKey, changedKey;
+                BuildPreparedShaderKey(request, key);
+                BuildPreparedShaderKey(replay.request, replayKey);
+                require(key == replayKey, "blend replay changed prepared identity");
+                auto changed = request;
+                changed.context.pixel->reversedBlend ^= 1u;
+                BuildPreparedShaderKey(changed, changedKey);
+                require(key != changedKey, "blend flags alias prepared identity");
+            }
+            verifyLegacyPixelRequests();
+            std::cout << "Reversed blend replay, identity and legacy tests passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--pixel-replay") {
+            verifyPixelRequestSerialization();
+            verifyLegacyPixelRequests();
+            verifyPixelExportReplay();
+            std::cout << "Pixel replay and shader identity tests passed\n";
             return 0;
         }
         require(argc == 1, "unknown shader memory test arguments");

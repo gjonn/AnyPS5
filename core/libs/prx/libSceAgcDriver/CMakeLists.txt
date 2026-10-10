@@ -98,6 +98,8 @@ set(agcDriverSources
         ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/Draw/DrawRegisterKey.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/Draw/DrawTiming.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/Draw/IndirectDraw.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/Capture/FrameCapture.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/Capture/FrameReplay.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/EntryPoints.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/Lifecycle.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/Memory/BufferCopy.cpp
@@ -646,6 +648,7 @@ target_include_directories(agc_driver_prepared_graphics_tests PRIVATE $<TARGET_P
 target_include_directories(agc_driver_prepared_shaders_tests PRIVATE
         $<TARGET_PROPERTY:shader_recompiler_agc_driver,INTERFACE_INCLUDE_DIRECTORIES>
 )
+target_include_directories(agc_driver_user_data_swappc_tests PRIVATE $<TARGET_PROPERTY:shader_recompiler_agc_driver,INTERFACE_INCLUDE_DIRECTORIES>)
 
 if(BUILD_TESTING)
     add_test(NAME agc_shader_bindless COMMAND agc_shader_memory_tests --bindless)
@@ -839,6 +842,29 @@ if(AGC_BUILD_VISUAL_TEST)
 endif()
 
 include(PostCompile.cmake)
+# Replays a frame captured with APS5_CAPTURE_FRAME (profiling/FRAME-REPLAY.md) through the driver.
+add_executable(agc_frame_replay EXCLUDE_FROM_ALL
+        tools/FrameReplay.cpp
+)
+target_include_directories(agc_frame_replay PRIVATE ${LIBS_INCLUDE_DIR})
+target_link_libraries(agc_frame_replay PRIVATE libSceAgcDriver libkernel libc)
+set_target_properties(agc_frame_replay PROPERTIES CXX_EXTENSIONS OFF)
+configure_windows_unwind(agc_frame_replay)
+
+add_test_executable(agc_driver_frame_replay_tests EXCLUDE_FROM_ALL tests/FrameReplay.cpp)
+target_include_directories(agc_driver_frame_replay_tests PRIVATE ${LIBS_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/tests ${CMAKE_SOURCE_DIR}/core/shader/recompiler ${CMAKE_SOURCE_DIR}/3rdparty/Vulkan-Headers/include)
+target_link_libraries(agc_driver_frame_replay_tests PRIVATE libSceAgcDriver libkernel libc)
+set_target_properties(agc_driver_frame_replay_tests PROPERTIES CXX_EXTENSIONS OFF)
+configure_windows_unwind(agc_driver_frame_replay_tests)
+if(BUILD_TESTING AND WIN32)
+    set_target_properties(agc_frame_replay agc_driver_frame_replay_tests PROPERTIES EXCLUDE_FROM_ALL OFF)
+    add_test(NAME agc_driver_frame_replay COMMAND agc_driver_frame_replay_tests $<TARGET_FILE:agc_frame_replay>)
+    add_test(NAME agc_driver_frame_replay_direct COMMAND agc_driver_frame_replay_tests $<TARGET_FILE:agc_frame_replay> --direct)
+    add_test(NAME agc_driver_frame_replay_trigger COMMAND agc_driver_frame_replay_tests $<TARGET_FILE:agc_frame_replay> --trigger)
+    set_tests_properties(agc_driver_frame_replay agc_driver_frame_replay_direct agc_driver_frame_replay_trigger PROPERTIES ENVIRONMENT "ANYPS5_NO_SHADER_CACHE=1" SKIP_RETURN_CODE 77 TIMEOUT 120 WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+endif()
+
 # Replays shader_*.req files the driver writes when a compute dispatch cannot be recompiled.
 add_executable(agc_shader_replay EXCLUDE_FROM_ALL
         tools/ShaderReplay.cpp
@@ -958,6 +984,24 @@ if(BUILD_TESTING)
     add_test(NAME scalar_saveexec COMMAND scalar_saveexec_tests)
     if(WIN32)
         set_tests_properties(scalar_saveexec PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+    endif()
+    add_test_executable(scalar_swappc_tests ${LIBS_INCLUDE_DIR}/tests/ScalarSwappc.cpp)
+    target_link_libraries(scalar_swappc_tests PRIVATE shader_recompiler_agc_driver libc)
+    configure_windows_unwind(scalar_swappc_tests)
+    add_test(NAME scalar_swappc COMMAND scalar_swappc_tests)
+    if(WIN32)
+        set_tests_properties(scalar_swappc PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+    endif()
+    add_test_executable(user_data_swappc_tests ${LIBS_INCLUDE_DIR}/tests/UserDataSwappc.cpp)
+    target_link_libraries(user_data_swappc_tests PRIVATE shader_recompiler_agc_driver libc)
+    configure_windows_unwind(user_data_swappc_tests)
+    add_test(NAME user_data_swappc COMMAND user_data_swappc_tests)
+    set_tests_properties(user_data_swappc PROPERTIES TIMEOUT 30)
+    set_tests_properties(agc_driver_user_data_swappc PROPERTIES TIMEOUT 30)
+    if(WIN32)
+        set_tests_properties(user_data_swappc PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
     endif()
     add_test_executable(scalar_bitcount64_tests ${LIBS_INCLUDE_DIR}/tests/ScalarBitCount64.cpp)

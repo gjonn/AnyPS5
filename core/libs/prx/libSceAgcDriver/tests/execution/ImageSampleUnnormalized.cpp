@@ -65,14 +65,22 @@ struct SamplerCase {
     std::array<std::uint32_t, 4> words;
     bool linear;
     bool border;
+    bool wrapX = false;
+    bool wrapY = false;
 };
 
-constexpr std::array<SamplerCase, 5> Samplers{{
+constexpr std::array<SamplerCase, 11> Samplers{{
     {"bilinear clamp-to-last-texel, point mips, MAX_LOD 0xfff", {0x00008092u, 0x00fff000u, 0x05500000u, 0u}, true, false},
     {"point clamp-to-last-texel, point mips", {0x00008092u, 0x00fff000u, 0x04000000u, 0u}, false, false},
     {"bilinear clamp-to-last-texel, linear mips, MIN_LOD 1, LOD bias 1.5", {0x00008092u, 0x00fff100u, 0x09500180u, 0u}, true, false},
     {"bilinear clamp-to-border, transparent black", {0x000080b6u, 0x00fff000u, 0x05500000u, 0u}, true, true},
     {"point clamp-to-border, no mips, transparent black", {0x000080b6u, 0u, 0u, 0u}, false, true},
+    {"bilinear wrap X", {0x00008090u, 0x00fff000u, 0x05500000u, 0u}, true, false, true, false},
+    {"point wrap X", {0x00008090u, 0x00fff000u, 0x04000000u, 0u}, false, false, true, false},
+    {"bilinear wrap Y", {0x00008082u, 0x00fff000u, 0x05500000u, 0u}, true, false, false, true},
+    {"point wrap Y", {0x00008082u, 0x00fff000u, 0x04000000u, 0u}, false, false, false, true},
+    {"bilinear wrap XY", {0x00008080u, 0x00fff100u, 0x09500180u, 0u}, true, false, true, true},
+    {"point wrap XY", {0x00008080u, 0x00fff000u, 0x04000000u, 0u}, false, false, true, true},
 }};
 
 struct Coordinate {
@@ -109,6 +117,9 @@ std::vector<Coordinate> Coordinates(std::uint32_t level) {
         const float v = static_cast<float>(x % height) + 0.5f;
         result.push_back({static_cast<float>(x) - 1.0f, v});
         result.push_back({static_cast<float>(x) + 2.0f, v});
+    }
+    for (const float u : {-2.25f * width, -0.25f, 0.0f, static_cast<float>(width), 2.25f * width}) {
+        for (const float v : {-2.25f * height, -0.25f, 0.0f, static_cast<float>(height), 2.25f * height}) result.push_back({u, v});
     }
     return result;
 }
@@ -181,6 +192,7 @@ Samples Run(AgcDriver::VulkanDevice& device, const std::array<std::uint32_t, 8>&
             {0, 0, 0, 128}
         };
         request.useCache = false;
+        request.target.nonConstantImageOffsets = false;
         const auto result = ShaderRecompiler::Recompile(request);
         device.Dispatch(result, 1, 1, 1, {}, reinterpret_cast<std::uintptr_t>(code.data()));
         device.WaitIdle();
@@ -196,6 +208,8 @@ Samples Run(AgcDriver::VulkanDevice& device, const std::array<std::uint32_t, 8>&
 std::array<double, 4> Fetch(const SamplerCase& sampler, std::uint32_t level, std::int32_t x, std::int32_t y) {
     const auto width = LevelWidth(level);
     const auto height = LevelHeight(level);
+    if (sampler.wrapX) x = (x % width + width) % width;
+    if (sampler.wrapY) y = (y % height + height) % height;
     if (sampler.border && (x < 0 || x >= width || y < 0 || y >= height)) return {0.0, 0.0, 0.0, 0.0};
     return TexelOf(level, std::clamp(x, 0, width - 1), std::clamp(y, 0, height - 1));
 }
@@ -305,7 +319,6 @@ int main(int argc, char** argv) {
             return 0;
         }
         ExpectFailure(*device, single, {0x00008092u, 0x00fff000u, 0x05100000u, 0u}, "different minification", "unequal minification and magnification filters");
-        ExpectFailure(*device, single, {0x00008090u, 0x00fff000u, 0x05500000u, 0u}, "clamp mode 0", "wrap on X");
         auto constant = TextureDescriptor(SingleLevel.data(), 0u, 0u);
         constant[3] = 0x041u | (Type3D << 28u);
         for (const auto& sampler : Samplers) {

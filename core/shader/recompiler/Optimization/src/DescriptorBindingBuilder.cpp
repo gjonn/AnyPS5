@@ -161,16 +161,21 @@ const char* UnnormalizedUseReason(std::uint32_t uses) {
 struct UnnormalizedProof {
     std::vector<bool> samplers;
     std::vector<bool> images;
+    std::vector<bool> normalizeCoordinates;
+    std::vector<bool> nearest;
 };
 
 UnnormalizedProof ProveUnnormalized(const ShaderInfo& info, const ResourceSnapshot& snapshot) {
-    UnnormalizedProof proof{std::vector<bool>(info.samplers.size()), std::vector<bool>(info.images.size())};
+    UnnormalizedProof proof{std::vector<bool>(info.samplers.size()), std::vector<bool>(info.images.size()), std::vector<bool>(info.samplers.size()), std::vector<bool>(info.samplers.size())};
     for (std::uint32_t r = 0; r < info.samplers.size(); r++) {
         if (snapshot.samplers.at(r).dwordCount != 4u) fail("sampler descriptor must contain four dwords");
         if ((snapshot.samplers[r].dwords[0] & ForceUnnormalizedBit) == 0u) {
             continue;
         }
         const auto& sampler = info.samplers[r];
+        const auto addressModes = snapshot.samplers[r].dwords[0];
+        proof.normalizeCoordinates[r] = (addressModes & 7u) == 0u || ((addressModes >> 3u) & 7u) == 0u;
+        proof.nearest[r] = ((snapshot.samplers[r].dwords[2] >> 20u) & 3u) == 0u;
         const std::uint32_t allowed = SamplerUseExplicitLod | SamplerUseImplicitLod | SamplerUseGradient | SamplerUseOffset;
         const std::uint32_t unsupported = sampler.uses & ~allowed;
         if (unsupported != 0u) {
@@ -203,7 +208,7 @@ UnnormalizedProof ProveUnnormalized(const ShaderInfo& info, const ResourceSnapsh
             if (image.conversionFormat != IrBufferFormat::Invalid || image.packed) {
                 failUnnormalized("samples an image that needs a format conversion or packed access");
             }
-            proof.images[pair.image] = true;
+            proof.images[pair.image] = proof.images[pair.image] || !proof.normalizeCoordinates[r];
         }
         proof.samplers[r] = true;
     }
@@ -258,7 +263,7 @@ DescriptorBindingPlan DescriptorBindingBuilder::Prepare(const IrBindingLayout& l
     DescriptorBindingPlan plan;
     const auto unnormalized = ProveUnnormalized(info, snapshot);
     for (std::uint32_t index = 0; index < info.samplers.size(); ++index) {
-        plan.specialization.push_back({PipelineSpecialization::UnnormalizedBase + index, unnormalized.samplers[index] ? 1u : 0u});
+        plan.specialization.push_back({PipelineSpecialization::UnnormalizedBase + index, unnormalized.samplers[index] ? (unnormalized.normalizeCoordinates[index] ? (unnormalized.nearest[index] ? 3u : 2u) : 1u) : 0u});
     }
     std::vector<std::uint32_t> compareStates(info.images.size());
     for (std::uint32_t index = 0; index < info.images.size(); ++index) {
@@ -270,6 +275,17 @@ DescriptorBindingPlan DescriptorBindingBuilder::Prepare(const IrBindingLayout& l
     }
     std::vector<std::uint32_t> imageModes(info.images.size());
     for (std::size_t index = 0; index < info.images.size(); ++index) imageModes[index] = ResourceMaterializer::RuntimeImageMode(info.images[index], snapshot.images.at(index), info.runtimeImageModes.at(index));
+    for (const auto& pair : info.sampledPairs) {
+        const auto& base = info.images.at(pair.image);
+        if ((base.emulatedCompare & EmulatedCompare::NativeOffsetUnsupported) == 0u || unnormalized.samplers.at(pair.sampler)) continue;
+        const auto validate = [&](std::uint32_t index) {
+            const auto& mode = info.runtimeImageModes.at(index).at(imageModes.at(index));
+            if (mode.constantSwizzle != 0u || (mode.emulatedFilter & EmulatedFilter::Enabled) != 0u || (mode.emulatedCompare & EmulatedCompare::Enabled) != 0u) return;
+            fail("has a texel offset that is not a constant, which image sampling takes only with VK_KHR_maintenance8 and shaderImageGatherExtended");
+        };
+        validate(pair.image);
+        for (const auto index : base.indirectResources) validate(index);
+    }
     for (std::uint32_t index = 0; index < info.images.size(); ++index) {
         if (info.images[index].indirectRoot != ImageResource::NoIndirectImage) continue;
         const auto& modes = info.runtimeImageModes.at(index);

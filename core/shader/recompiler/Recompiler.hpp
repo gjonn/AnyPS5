@@ -31,6 +31,18 @@ struct MemoryRegion {
     std::span<const std::byte> bytes;
 };
 
+inline constexpr std::uint32_t MaxCapturedShaderCalls = 64;
+
+struct CapturedShaderCall {
+    std::uint32_t callProgramCounter;
+    std::uint32_t targetProgramCounter;
+    std::uint32_t returnProgramCounter;
+    std::uint64_t targetAddress;
+    std::uint32_t userDataIndex;
+
+    bool operator==(const CapturedShaderCall&) const = default;
+};
+
 struct ShaderBinary {
     ShaderStage stage;
     std::uint64_t codeAddress;
@@ -38,6 +50,7 @@ struct ShaderBinary {
     std::uint64_t headerAddress;
     std::span<const std::byte> header;
     std::uint64_t codeHash = 0;
+    std::span<const CapturedShaderCall> capturedCalls{};
 };
 
 struct ShaderComputeStageInfo {
@@ -108,6 +121,11 @@ enum class ConservativeZExport : std::uint8_t {
     GreaterThanZ
 };
 
+enum class ColorExportPacking : std::uint8_t {
+    None,
+    Float11_11_10
+};
+
 struct ShaderPixelStageInfo {
     std::uint32_t interpolatorCount;
     std::array<std::uint32_t, 32> interpolatorSettings;
@@ -133,6 +151,7 @@ struct ShaderPixelStageInfo {
     bool orderedPixelShader;
     std::array<std::uint8_t, 8> targetOutputMode;
     std::array<std::uint8_t, 8> targetExportMapping;
+    std::array<ColorExportPacking, 8> targetExportPacking{};
     std::uint32_t reversedBlend = 0;
 };
 

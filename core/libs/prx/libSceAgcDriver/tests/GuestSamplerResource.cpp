@@ -344,14 +344,19 @@ void RunGuestSamplerResourceTests() {
     unnormalizedAniso.xyMagFilter = 2;
     unnormalizedAniso.xyMinFilter = 2;
     rejectUnnormalized(unnormalizedAniso, "unnormalized coordinates with anisotropic filtering");
-    for (const std::uint32_t clamp : {0u, 1u, 3u, 4u, 5u, 7u}) {
+    for (const std::uint32_t clamp : {1u, 3u, 4u, 5u, 7u}) {
         Fields clampX = unnormalizedBase;
         clampX.clampX = clamp;
         rejectUnnormalized(clampX, "unnormalized coordinates with clamp mode " + std::to_string(clamp) + " on X");
     }
-    Fields clampY = unnormalizedBase;
-    clampY.clampY = 0;
-    rejectUnnormalized(clampY, "unnormalized coordinates with clamp mode 0 on Y");
+    for (const auto axes : {1u, 2u, 3u}) {
+        Fields wrapped = unnormalizedBase;
+        if ((axes & 1u) != 0u) wrapped.clampX = 0;
+        if ((axes & 2u) != 0u) wrapped.clampY = 0;
+        const auto decoded = DecodeSamplerResource(pack(wrapped), true);
+        Require(!decoded.unnormalizedCoordinates && decoded.minLod == 0.0f && decoded.maxLod == 0.0f, "pixel-coordinate wrapping must use normalized host sampling at the base mip");
+        Require(decoded.addressModeU == ((axes & 1u) != 0u ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE) && decoded.addressModeV == ((axes & 2u) != 0u ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE), "pixel-coordinate wrapping lost the guest address mode");
+    }
     Fields unnormalizedTruncated = unnormalizedBase;
     unnormalizedTruncated.truncCoord = true;
     rejectUnnormalized(unnormalizedTruncated, "unnormalized coordinates with TRUNC_COORD");

@@ -96,6 +96,14 @@ std::uint64_t CollectEpochBumps();
 std::uint64_t ThreadCollectEpoch();
 std::uint64_t UnwatchSerial();
 std::uint64_t CollectWritesUncached(std::uint64_t address, std::size_t bytes);
+// Frame capture (FrameCapture.cpp). `dirty` is called for every page a walk of any thread reports
+// written and for the pages a fresh commit replaced; `stored` with the bytes the driver stored
+// itself (storeOwn). Both run under the tracker mutex and must not call back into the tracker.
+void SetCaptureObservers(void (*dirty)(std::uint64_t address, std::size_t bytes), void (*stored)(std::uint64_t address, std::size_t bytes));
+// A CPU collect (as CollectWritesUncached) of the watched, committed parts of the range; blocks the
+// tracker excluded (host imports) have their dirty bits reset and reported without stamps.
+// `unwatched` receives the committed parts whose dirty bits cannot be read.
+void CollectForCapture(std::uint64_t address, std::size_t bytes, std::vector<std::pair<std::uint64_t, std::uint64_t>>& unwatched);
 // The tracker's current generation (every collect and MarkWritten bumps it): a stamp taken after
 // a set of driver stores, for UnchangedSinceCollected to compare against later. Read under the
 // tracker mutex, so every collect that bumped before it has finished its walk and every later

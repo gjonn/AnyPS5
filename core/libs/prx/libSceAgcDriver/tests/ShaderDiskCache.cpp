@@ -327,6 +327,52 @@ void verifyEntryRoundTrip() {
     require(ShaderDiskCache::DecodeEntry(incompatibleFile, key, decoded) == ShaderDiskCache::LoadStatus::Rejected, "an entry with an incompatible runtime ABI loads");
 }
 
+void verifyModuleEntryRoundTrip() {
+    const std::vector<std::uint32_t> spirv{0x07230203u, 0x00010300u, 0u, 16u, 0u, 0x00020011u, 1u};
+    const std::vector<VertexInputPatch> patches{{0u, 6u, {1u, 2u, 3u}}};
+    const std::array<std::uint32_t, 4> classes{1u, 0u, 0u, 0u};
+    const std::vector<PipelineSpecializationConstant> constants{{3u, 7u}, {9u, 0x3f800000u}};
+    const ShaderDiskCache::SpecializationTarget target{0x00403000u, 0x00010300u, false};
+    std::vector<std::byte> key;
+    ShaderDiskCache::BuildModuleKey(spirv, patches, classes, constants, target, key);
+    const ShaderDiskCache::SpecializedModuleEntry module{spirv, {0u, 2u, 5u}, true};
+    const auto file = ShaderDiskCache::EncodeModuleEntry(key, module);
+    ShaderDiskCache::SpecializedModuleEntry decoded;
+    require(ShaderDiskCache::DecodeModuleEntry(file, key, decoded) == ShaderDiskCache::LoadStatus::Loaded, "an encoded module entry does not decode");
+    require(decoded.spirv == module.spirv && decoded.bindings == module.bindings && decoded.pushData == module.pushData, "module entry round trip");
+    for (std::size_t size = 0; size < file.size(); ++size) {
+        ShaderDiskCache::SpecializedModuleEntry partial;
+        require(ShaderDiskCache::DecodeModuleEntry(std::span(file).first(size), key, partial) == ShaderDiskCache::LoadStatus::Rejected, "a module entry truncated to " + std::to_string(size) + " bytes is not rejected");
+    }
+    const auto keyFor = [&](auto&& change) {
+        auto otherSpirv = spirv;
+        auto otherPatches = patches;
+        auto otherClasses = classes;
+        auto otherConstants = constants;
+        auto otherTarget = target;
+        change(otherSpirv, otherPatches, otherClasses, otherConstants, otherTarget);
+        std::vector<std::byte> other;
+        ShaderDiskCache::BuildModuleKey(otherSpirv, otherPatches, otherClasses, otherConstants, otherTarget, other);
+        return other;
+    };
+    const std::vector<std::vector<std::byte>> others{
+        keyFor([](auto& words, auto&, auto&, auto&, auto&) { words.back() ^= 1u; }),
+        keyFor([](auto&, auto& vertex, auto&, auto&, auto&) { vertex[0].values[2] ^= 1u; }),
+        keyFor([](auto&, auto&, auto& kinds, auto&, auto&) { kinds[0] = 2u; }),
+        keyFor([](auto&, auto&, auto&, auto& values, auto&) { values[1].value ^= 1u; }),
+        keyFor([](auto&, auto&, auto&, auto& values, auto&) { values.pop_back(); }),
+        keyFor([](auto&, auto&, auto&, auto&, auto& spirvTarget) { spirvTarget.vulkanVersion ^= 0x1000u; }),
+        keyFor([](auto&, auto&, auto&, auto&, auto& spirvTarget) { spirvTarget.spirvVersion = 0x00010500u; }),
+        keyFor([](auto&, auto&, auto&, auto&, auto& spirvTarget) { spirvTarget.nonConstantImageOffsets = true; }),
+    };
+    for (std::size_t index = 0; index < others.size(); ++index) {
+        require(others[index] != key, "module key ignores input " + std::to_string(index));
+        require(ShaderDiskCache::DecodeModuleEntry(file, others[index], decoded) == ShaderDiskCache::LoadStatus::KeyMismatch, "a module entry loads for another key " + std::to_string(index));
+    }
+    SampleRequest sample;
+    require(ShaderDiskCache::DecodeModuleEntry(ShaderDiskCache::EncodeEntry(sample.Key(), sampleVariant()), sample.Key(), decoded) == ShaderDiskCache::LoadStatus::Rejected, "a variant entry decodes as a module");
+}
+
 void verifyArtifactStorageIsolation() {
     SampleRequest sample;
     const auto key = sample.Key();
@@ -987,6 +1033,11 @@ void verifyDefaultDirectory(const char* self) {
 
 int main(int argc, char** argv) {
     try {
+        if (argc == 2 && std::string_view(argv[1]) == "--module-cache-only") {
+            verifyModuleEntryRoundTrip();
+            std::cout << "Specialized-module round-trip, key and truncation tests passed\n";
+            return 0;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--specialization-only") {
             verifyBuiltinSpecialization();
             verifySpecializationLiveness();
@@ -1002,6 +1053,7 @@ int main(int argc, char** argv) {
         setEnvironment("ANYPS5_SHADER_CACHE_DIR", directory.string());
         verifyResultRoundTrip();
         verifyEntryRoundTrip();
+        verifyModuleEntryRoundTrip();
         verifyArtifactStorageIsolation();
         verifyKeySensitivity();
         verifyStore();
@@ -1014,6 +1066,7 @@ int main(int argc, char** argv) {
         verifyVertexTypeSpecialization();
         verifyBuiltinSpecialization();
         verifySpecializationLiveness();
+        ShaderDiskCache::Flush();
         std::error_code error;
         std::filesystem::remove_all(directory, error);
         std::cout << "shader disk cache tests passed\n";

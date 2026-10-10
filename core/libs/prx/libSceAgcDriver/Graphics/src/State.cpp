@@ -1,4 +1,5 @@
 #include <cstdio>
+#include "prx/libSceAgcDriver/Graphics/include/DebugControls.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/State.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/DepthSurface.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/TextureTiling.hpp"
@@ -219,6 +220,12 @@ void decodeDepth(const Registers& cx, std::uint32_t depthControl, State& result)
     const auto size = read(cx, 0x007);
     depth.extent = {(size & 0x3fffu) + 1u, ((size >> 16u) & 0x3fffu) + 1u};
     if (const auto slice = view & 0x7ffu, lastSlice = (view >> 13u) & 0x7ffu; lastSlice > slice && (read(cx, 0x207) & LayerExports) != 0) depth.layers = lastSlice + 1u - slice;
+    if (const auto slice = view & 0x7ffu, lastSlice = (view >> 13u) & 0x7ffu; slice != 0u || lastSlice != 0u) {
+        depth.arrayAddress = depth.address;
+        depth.arrayStencilAddress = depth.stencilAddress;
+        depth.arraySlice = slice;
+        depth.arraySlices = std::max(slice, lastSlice) + 1u;
+    }
     if (const auto slice = view & 0x1fffu; slice != 0) {
         if (depth.address != 0) depth.address += static_cast<std::uint64_t>(slice) * DepthSliceBytes(depth.extent, zFormat == 1 ? 2u : 4u);
         if (depth.stencilAddress != 0) depth.stencilAddress += static_cast<std::uint64_t>(slice) * DepthSliceBytes(depth.extent, 1u);
@@ -326,6 +333,7 @@ struct DecodedColorFormat {
     VkFormat format;
     std::uint32_t elementBytes;
     std::uint8_t componentMapping = 0xe4u;
+    ShaderRecompiler::ColorExportPacking packing = ShaderRecompiler::ColorExportPacking::None;
 };
 
 // CB_COLOR_INFO FORMAT / NUMBER_TYPE / COMP_SWAP to a Vulkan attachment format. AMD formats list
@@ -338,7 +346,7 @@ DecodedColorFormat DecodeColorFormat(std::uint32_t format, std::uint32_t number,
     };
     const bool alternate = swap == 1;
     const auto single = [&](VkFormat vkFormat, std::uint32_t bytes) { return DecodedColorFormat{vkFormat, bytes, static_cast<std::uint8_t>((0xe4u & ~3u) | swap)}; };
-    if (swap > 1 && format != 1 && format != 2 && format != 4 && format != 10 && format != 12) return fail();
+    if (swap > 1 && format != 1 && format != 2 && format != 4 && format != 7 && format != 10 && format != 12) return fail();
     switch (format) {
         case 1:
             if (number == unorm) return single(VK_FORMAT_R8_UNORM, 1);
@@ -373,6 +381,10 @@ DecodedColorFormat DecodeColorFormat(std::uint32_t format, std::uint32_t number,
             // COLOR_10_11_11: red in the low 11 bits, the Vulkan B10G11R11 packing.
             if (swap != 0 || number != floating) return fail();
             return {VK_FORMAT_B10G11R11_UFLOAT_PACK32, 4};
+        case 7:
+            if (number != floating || swap != 2) return fail();
+            if (DebugValue(DebugKey::Packed111110) == 0) return {VK_FORMAT_B10G11R11_UFLOAT_PACK32, 4, 0xc6u};
+            return {VK_FORMAT_R32_UINT, 4, 0xc6u, ShaderRecompiler::ColorExportPacking::Float11_11_10};
         case 9:
             // COLOR_2_10_10_10 keeps red in the low bits, the Vulkan A2B10G10R10 packing.
             if (number != unorm) return fail();
@@ -622,6 +634,10 @@ State DecodeState(const QueueState& queue) {
         if (result.depth) result.renderExtent = {std::min(result.renderExtent.width, result.depth->extent.width), std::min(result.renderExtent.height, result.depth->extent.height)};
     } else if (result.depth) {
         result.renderExtent = result.depth->extent;
+        if (result.depth->layers > 1 && DebugValue(DebugKey::SplitDepthSlices) == 0) {
+            result.renderLayers = result.depth->layers;
+            result.layerExports = read(cx, 0x207) & (1u << 18u);
+        }
     } else {
         const auto screenBottomRight = read(cx, 0xd);
         APS5_LOG_OUT_DEBUG("No color target, screen BR register=0x%x", screenBottomRight);
@@ -665,7 +681,41 @@ State DecodeState(const QueueState& queue) {
             if (((exportedMask >> ((mapping >> (2u * component)) & 3u)) & 1u) != 0) state.colorWriteMask |= 1u << component;
         }
         state.blendEnable = (blend >> 30u) & 1u;
-        if (state.blendEnable && (mapping == 0x1bu || mapping == 0x93u)) throw std::runtime_error("AGC graphics: blending into a color target with a reversed component order is not implemented");
+        if (color.packing != ShaderRecompiler::ColorExportPacking::None) {
+            Require((exportedMask & 7u) == 7u, "partial RGB writes into packed float targets are unsupported");
+            const auto output = (exportFormat >> (4u * color.exportIndex)) & 15u;
+            Require(output != 5u && output != 6u, "integer normalized exports into packed float targets are unsupported");
+            if (state.blendEnable) {
+                if (!((blend & 0x1fu) == 1u && ((blend >> 8u) & 0x1fu) == 0u && ((blend >> 5u) & 7u) == 0u)) {
+                    char text[200];
+                    std::snprintf(text, sizeof(text), "packed float target blending requires source replacement (target 0x%llx %ux%u format %d, blend 0x%x)", static_cast<unsigned long long>(color.address), color.extent.width, color.extent.height, static_cast<int>(color.format), blend);
+                    throw std::runtime_error(std::string("AGC graphics: ") + text);
+                }
+            }
+            state.blendEnable = VK_FALSE;
+            state.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
+            result.blends[color.exportIndex] = state;
+            continue;
+        }
+        if (state.blendEnable && (mapping == 0x1bu || mapping == 0x93u)) {
+            Require((read(cx, 0x31c + slot * 0xfu) & 0x10000u) == 0, "blend bypass conflicts with enabled blending");
+            Require(color.exportIndex == 0, "blending into a color target with a reversed component order is only implemented for the first export");
+            const auto alpha = (blend & 0x20000000u) != 0 ? blend >> 16u : blend;
+            const auto colorOp = (blend >> 5u) & 7u;
+            Require(colorOp == ((alpha >> 5u) & 7u), "blending into a color target with a reversed component order needs one operation for color and alpha");
+            std::array<std::uint32_t, 4> factors{blend & 0x1fu, (blend >> 8u) & 0x1fu, alpha & 0x1fu, (alpha >> 8u) & 0x1fu};
+            for (const auto factor : factors) Require(factor <= 5u, "blending into a color target with a reversed component order reads a destination or constant factor, which is not implemented");
+            if (colorOp == 2u || colorOp == 3u) factors = {1u, 0u, 1u, 0u};
+            result.reversedBlend = 0x80000000u | factors[0] | (factors[1] << 5u) | (factors[2] << 10u) | (factors[3] << 15u);
+            state.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR;
+            state.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            state.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
+            state.colorBlendOp = blendOp(colorOp);
+            state.alphaBlendOp = state.colorBlendOp;
+            result.blends[color.exportIndex] = state;
+            continue;
+        }
         if (state.blendEnable) {
             Require((read(cx, 0x31c + slot * 0xfu) & 0x10000u) == 0, "blend bypass conflicts with enabled blending");
             state.srcColorBlendFactor = blendFactor(blend & 0x1fu);
@@ -686,6 +736,12 @@ State DecodeState(const QueueState& queue) {
     }
     if (!result.colors.empty()) result.blend = result.blends[result.colors.front().exportIndex];
     APS5_LOG_OUT_DEBUG("DecodeState done colorTarget=%u render=%ux%u topology=%u", result.hasColorTarget ? 1u : 0u, result.renderExtent.width, result.renderExtent.height, static_cast<unsigned>(result.topology));
+    return result;
+}
+
+std::array<ShaderRecompiler::ColorExportPacking, 8> ExportPackings(const State& state) {
+    std::array<ShaderRecompiler::ColorExportPacking, 8> result{};
+    for (const auto& color : state.colors) result.at(color.exportIndex) = color.packing;
     return result;
 }
 
@@ -816,6 +872,8 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
     GuestMemory::CheckRange(reinterpret_cast<const void*>(color.address), color.bytes, colorLayout.Alignment(), true);
     color.format = decoded.format;
     color.componentMapping = decoded.componentMapping;
+    color.packing = decoded.packing;
+    Require(color.packing == ShaderRecompiler::ColorExportPacking::None || (info & 0x10002000u) == 0, "compressed packed float color targets are unsupported");
     for (std::uint32_t word = 0; word < 2; ++word) {
         const auto clear = find(cx, 0x323 + word + stride);
         color.clearWords[word] = clear == cx.end() ? 0u : clear->second;

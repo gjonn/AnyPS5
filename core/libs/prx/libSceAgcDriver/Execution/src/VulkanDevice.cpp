@@ -3,6 +3,7 @@
 #include "prx/libSceAgcDriver/Execution/include/CaptureTrace.hpp"
 #include "BdaAbi.hpp"
 #include "prx/libSceAgcDriver/Execution/include/VulkanDevice.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/DebugControls.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver.hpp"
 #include "prx/libSceAgcDriver/Execution/include/PerformanceTimer.hpp"
 #include "prx/libSceAgcDriver/Execution/include/BdaFeatures.hpp"
@@ -211,6 +212,7 @@ struct VulkanDevice::State {
     std::uint32_t srgbDecodeFormats = 0;
     bool depthClamp = false;
     bool depthBounds = false;
+    bool dualSrcBlend = false;
     bool depthBiasClamp = false;
     bool occlusionQueryPrecise = false;
     VkDeviceSize hostImportAlignment = 0;
@@ -965,6 +967,7 @@ VulkanDevice::VulkanDevice(const PresentationWindow* window) : state(std::make_u
     enabled.depthBounds = available.depthBounds;
     state->depthBounds = enabled.depthBounds == VK_TRUE;
     enabled.dualSrcBlend = available.dualSrcBlend;
+    state->dualSrcBlend = enabled.dualSrcBlend == VK_TRUE;
     enabled.depthBiasClamp = available.depthBiasClamp;
     state->depthBiasClamp = enabled.depthBiasClamp == VK_TRUE;
     enabled.occlusionQueryPrecise = available.occlusionQueryPrecise;
@@ -2056,6 +2059,16 @@ FrameDumps& Dumps() {
 }
 
 bool VulkanDevice::PresentDisplayBuffer(const DisplayBuffer& buffer) {
+    static const std::uint64_t dumpImagesAt = [] { const char* text = std::getenv("APS5_DUMP_IMAGES_AT"); return text != nullptr ? std::strtoull(text, nullptr, 10) : 0ull; }();
+    static std::uint64_t displayPresents = 0;
+    if (dumpImagesAt != 0 && ++displayPresents == dumpImagesAt) Graphics::DumpCachedStorageImages(graphicsContext().device, "images_" + std::to_string(dumpImagesAt));
+    Graphics::PollDebugControls();
+    if (std::string label; Graphics::TakeDumpRequest(label)) Graphics::DumpCachedStorageImages(graphicsContext().device, "dump_" + label);
+    if (const auto depth = Graphics::TakeDebugValue(Graphics::DebugKey::DumpDepth); depth != 0) {
+        char name[64];
+        std::snprintf(name, sizeof(name), "dump_depth_%llx.raw", static_cast<unsigned long long>(depth));
+        Graphics::DumpDepthSurface(depth, name);
+    }
     if (buffer.tilingMode == 1) {
         const auto pixels = ReadDisplayBuffer(buffer);
         return present(buffer.width, buffer.height, true, pixels);
@@ -2564,6 +2577,7 @@ Graphics::Context VulkanDevice::buildContext() const {
     context.imageInt64Atomics = state->imageInt64Atomics;
     context.geometryShader = state->geometryShader;
     context.sampleRateShading = state->sampleRateShading;
+    context.dualSrcBlend = state->dualSrcBlend;
     context.viewportIndexLayer = state->viewportIndexLayer;
     context.nullDescriptors = state->shaderProfile != nullptr && state->shaderProfile->NullDescriptors();
     context.primitiveListRestart = state->primitiveListRestart;

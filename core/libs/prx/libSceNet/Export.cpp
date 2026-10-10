@@ -2,6 +2,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#endif
 #else
 #include <arpa/inet.h>
 #include <cerrno>
@@ -75,6 +78,8 @@ constexpr int NET_SO_RCVTIMEO = 0x1006;
 constexpr int NET_SO_NBIO = 0x1200;
 constexpr int NET_MSG_PEEK = 0x2;
 constexpr int NET_MSG_TRUNC = 0x10;
+constexpr int NET_MSG_DONTWAIT = 0x80;
+constexpr int NET_MSG_NOSIGNAL = 0x20000;  // host sends never raise SIGPIPE (NATIVE_SEND_FLAGS)
 constexpr int NET_UIO_MAXIOV = 1024;
 
 #ifdef _WIN32
@@ -265,6 +270,96 @@ void log_soft(const char* func, const char* what) {
     std::fflush(stderr);
 }
 
+// MSG_DONTWAIT applies to a single call on the guest. Winsock has no such flag, so a zero-timeout poll
+// decides whether the call would block; POSIX hosts pass the flag through.
+bool would_block(NativeSocket socket, int flags, bool write) {
+    if (!(flags & NET_MSG_DONTWAIT)) return false;
+#ifdef _WIN32
+    WSAPOLLFD descriptor{};
+    descriptor.fd = socket;
+    descriptor.events = write ? POLLWRNORM : POLLRDNORM;
+    return WSAPoll(&descriptor, 1, 0) == 0;
+#else
+    (void)socket;
+    (void)write;
+    return false;
+#endif
+}
+
+int native_recv_flags(int flags) {
+    int native = (flags & NET_MSG_PEEK) ? MSG_PEEK : 0;
+#ifndef _WIN32
+    if (flags & NET_MSG_DONTWAIT) native |= MSG_DONTWAIT;
+#endif
+    return native;
+}
+
+int native_send_flags(int flags) {
+#ifndef _WIN32
+    if (flags & NET_MSG_DONTWAIT) return NATIVE_SEND_FLAGS | MSG_DONTWAIT;
+#endif
+    (void)flags;
+    return NATIVE_SEND_FLAGS;
+}
+
+std::atomic<int> g_telem_fd{-1};
+
+std::string telem_address(const sockaddr_storage& address) {
+    if (address.ss_family != AF_INET) return "family " + std::to_string(address.ss_family);
+    const auto& v4 = reinterpret_cast<const sockaddr_in&>(address);
+    const auto ip = ntohl(v4.sin_addr.s_addr);
+    char text[32];
+    std::snprintf(text, sizeof(text), "%u.%u.%u.%u:%u", ip >> 24, (ip >> 16) & 0xffu, (ip >> 8) & 0xffu, ip & 0xffu, ntohs(v4.sin_port));
+    return text;
+}
+
+void telem_console(const char* line) {
+#ifdef _WIN32
+    static HANDLE console = INVALID_HANDLE_VALUE;
+    static bool opened = false;
+    static bool vt = false;
+    if (!opened) {
+        opened = true;
+        console = CreateFileW(L"CONOUT$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+        DWORD mode = 0;
+        if (console != INVALID_HANDLE_VALUE && GetConsoleMode(console, &mode)) {
+            vt = SetConsoleMode(console, mode | 0x0004u) != 0;
+        }
+    }
+    if (console == INVALID_HANDLE_VALUE) return;
+    DWORD written = 0;
+    if (vt) {
+        const std::string text = std::string("\x1b[92m") + line + "\x1b[0m\r\n";
+        WriteConsoleA(console, text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
+        return;
+    }
+    CONSOLE_SCREEN_BUFFER_INFO info{};
+    const bool restore = GetConsoleScreenBufferInfo(console, &info) != 0;
+    SetConsoleTextAttribute(console, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+    const std::string text = std::string(line) + "\r\n";
+    WriteConsoleA(console, text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
+    if (restore) SetConsoleTextAttribute(console, info.wAttributes);
+#else
+    (void)line;
+#endif
+}
+
+template <typename... Args>
+void telem_log(const char* site, int limit, const char* format, Args... args) {
+    static std::mutex mtx;
+    static std::map<std::string, int> hits;
+    std::lock_guard<std::mutex> lk(mtx);
+    const int hit = ++hits[site];
+    if (hit > limit) return;
+    char body[512];
+    std::snprintf(body, sizeof(body), format, args...);
+    char line[600];
+    std::snprintf(line, sizeof(line), "[NET-TELEM] %s #%d: %s", site, hit, body);
+    std::fprintf(stderr, "%s\n", line);
+    std::fflush(stderr);
+    telem_console(line);
+}
+
 std::uint16_t swap16(std::uint16_t v) { return static_cast<std::uint16_t>((v << 8) | (v >> 8)); }
 std::uint32_t swap32(std::uint32_t v) {
     return (v << 24) | ((v & 0xFF00u) << 8) | ((v >> 8) & 0xFF00u) | (v >> 24);
@@ -415,6 +510,14 @@ int APS5_VABI sceNetSocket(const char* name, int family, int type, int protocol)
     if (!initialize_sockets()) return fail(5);
     const NativeSocket native = ::socket(family == NET_AF_INET ? AF_INET : AF_INET6, type, protocol);
     if (native == INVALID_NATIVE_SOCKET) return fail(native_error());
+#ifdef _WIN32
+    if (type == NET_SOCK_DGRAM) {
+        // FreeBSD ignores ICMP port unreachable on unconnected UDP sockets; Winsock would fail the next receive.
+        BOOL report = FALSE;
+        DWORD returned = 0;
+        WSAIoctl(native, SIO_UDP_CONNRESET, &report, sizeof(report), nullptr, 0, &returned, nullptr, nullptr);
+    }
+#endif
     std::shared_ptr<NativeSocketHandle> handle;
     try {
         handle = std::make_shared<NativeSocketHandle>(native);
@@ -483,9 +586,18 @@ int APS5_VABI sceNetBind_nid_postfix(int s, const void* addr, uint32_t addrlen) 
     sockaddr_storage native{};
     NativeLength native_length = 0;
     if (!guest_to_native_address(addr, addrlen, native, native_length)) return fail(NET_EINVAL);
+    const bool telemetry = native.ss_family == AF_INET && ntohs(reinterpret_cast<const sockaddr_in&>(native).sin_port) == 33739;
+    if (telemetry) telem_log("bind", 20, "fd %d type %d address %s", s, socket.type, telem_address(native).c_str());
     if (native.ss_family != (socket.family == NET_AF_INET ? AF_INET : AF_INET6)) return fail(NET_EAFNOSUPPORT);
-    if (::bind(socket.native->value, reinterpret_cast<const sockaddr*>(&native), native_length) != 0)
-        return fail(native_error());
+    if (::bind(socket.native->value, reinterpret_cast<const sockaddr*>(&native), native_length) != 0) {
+        const int error = native_error();
+        if (telemetry) telem_log("bind-failed", 20, "fd %d errno %d", s, error);
+        return fail(error);
+    }
+    if (telemetry) {
+        g_telem_fd = s;
+        telem_log("bind-ok", 20, "fd %d", s);
+    }
     std::lock_guard<std::mutex> lk(g_mutex);
     auto it = g_socks.find(s);
     if (it != g_socks.end()) it->second.bound = true;
@@ -570,7 +682,10 @@ int APS5_VABI sceNetConnect(int s, const void* addr, uint32_t addrlen) {
 }
 
 int64_t APS5_VABI sceNetRecv(int s, void* buf, size_t len, int flags) {
-    if (flags != 0 && flags != 2) return fail(NET_EOPNOTSUPP);
+    if (flags & ~(NET_MSG_PEEK | NET_MSG_DONTWAIT)) {
+        telem_log("recv-flags", 5, "fd %d flags 0x%x rejected", s, flags);
+        return fail(NET_EOPNOTSUPP);
+    }
     if (!buf && len) return fail(NET_EINVAL);
     if (len > INT_MAX) return fail(NET_EMSGSIZE);
     Sock socket;
@@ -580,13 +695,17 @@ int64_t APS5_VABI sceNetRecv(int s, void* buf, size_t len, int flags) {
         if (it == g_socks.end()) return fail(NET_EBADF);
         socket = it->second;
     }
-    const int native_flags = flags == 2 ? MSG_PEEK : 0;
+    if (would_block(socket.native->value, flags, false)) return fail(NET_EAGAIN);
+    const int native_flags = native_recv_flags(flags);
     const int result = ::recv(socket.native->value, static_cast<char*>(buf), static_cast<int>(len), native_flags);
     return result >= 0 ? result : fail(native_error());
 }
 
 int64_t APS5_VABI sceNetRecvfrom(int s, void* buf, size_t len, int flags, void* from, uint32_t* fromlen) {
-    if (flags != 0 && flags != 2) return fail(NET_EOPNOTSUPP);
+    if (flags & ~(NET_MSG_PEEK | NET_MSG_DONTWAIT)) {
+        telem_log("recvfrom-flags", 5, "fd %d flags 0x%x rejected", s, flags);
+        return fail(NET_EOPNOTSUPP);
+    }
     if (!buf && len) return fail(NET_EINVAL);
     if (len > INT_MAX) return fail(NET_EMSGSIZE);
     if (from && !fromlen) return fail(NET_EINVAL);
@@ -599,16 +718,26 @@ int64_t APS5_VABI sceNetRecvfrom(int s, void* buf, size_t len, int flags, void* 
     }
     sockaddr_storage peer{};
     NativeLength peer_length = sizeof(peer);
-    const int native_flags = flags == 2 ? MSG_PEEK : 0;
+    if (would_block(socket.native->value, flags, false)) return fail(NET_EAGAIN);
+    const int native_flags = native_recv_flags(flags);
+    const bool telemetry = s == g_telem_fd;
     const int result = ::recvfrom(socket.native->value, static_cast<char*>(buf), static_cast<int>(len),
-        native_flags, from ? reinterpret_cast<sockaddr*>(&peer) : nullptr, from ? &peer_length : nullptr);
-    if (result < 0) return fail(native_error());
+        native_flags, (from || telemetry) ? reinterpret_cast<sockaddr*>(&peer) : nullptr, (from || telemetry) ? &peer_length : nullptr);
+    if (result < 0) {
+        const int error = native_error();
+        if (telemetry) telem_log("recvfrom-error", 5, "fd %d flags 0x%x errno %d", s, flags, error);
+        return fail(error);
+    }
+    if (telemetry) telem_log("recvfrom", 20, "fd %d flags 0x%x %d bytes from %s", s, flags, result, telem_address(peer).c_str());
     if (from && !native_to_guest_address(peer, from, fromlen)) return fail(NET_EAFNOSUPPORT);
     return result;
 }
 
 int64_t APS5_VABI sceNetSend(int s, const void* buf, size_t len, int flags) {
-    if (flags != 0) return fail(NET_EOPNOTSUPP);
+    if (flags & ~(NET_MSG_DONTWAIT | NET_MSG_NOSIGNAL)) {
+        telem_log("send-flags", 5, "fd %d flags 0x%x rejected", s, flags);
+        return fail(NET_EOPNOTSUPP);
+    }
     if (!buf && len) return fail(NET_EINVAL);
     if (len > INT_MAX) return fail(NET_EMSGSIZE);
     Sock socket;
@@ -618,12 +747,16 @@ int64_t APS5_VABI sceNetSend(int s, const void* buf, size_t len, int flags) {
         if (it == g_socks.end()) return fail(NET_EBADF);
         socket = it->second;
     }
-    const int result = ::send(socket.native->value, static_cast<const char*>(buf), static_cast<int>(len), NATIVE_SEND_FLAGS);
+    if (would_block(socket.native->value, flags, true)) return fail(NET_EAGAIN);
+    const int result = ::send(socket.native->value, static_cast<const char*>(buf), static_cast<int>(len), native_send_flags(flags));
     return result >= 0 ? result : fail(native_error());
 }
 
 int64_t APS5_VABI sceNetSendto(int s, const void* buf, size_t len, int flags, const void* to, uint32_t tolen) {
-    if (flags != 0) return fail(NET_EOPNOTSUPP);
+    if (flags & ~(NET_MSG_DONTWAIT | NET_MSG_NOSIGNAL)) {
+        telem_log("sendto-flags", 5, "fd %d flags 0x%x rejected", s, flags);
+        return fail(NET_EOPNOTSUPP);
+    }
     if (!buf && len) return fail(NET_EINVAL);
     if (len > INT_MAX) return fail(NET_EMSGSIZE);
     Sock socket;
@@ -633,18 +766,25 @@ int64_t APS5_VABI sceNetSendto(int s, const void* buf, size_t len, int flags, co
         if (it == g_socks.end()) return fail(NET_EBADF);
         socket = it->second;
     }
+    if (would_block(socket.native->value, flags, true)) return fail(NET_EAGAIN);
     int result;
     if (!to) {
         if (tolen != 0) return fail(NET_EINVAL);
-        result = ::send(socket.native->value, static_cast<const char*>(buf), static_cast<int>(len), NATIVE_SEND_FLAGS);
+        result = ::send(socket.native->value, static_cast<const char*>(buf), static_cast<int>(len), native_send_flags(flags));
     } else {
         sockaddr_storage destination{};
         NativeLength destination_length = 0;
         if (!guest_to_native_address(to, tolen, destination, destination_length)) return fail(NET_EINVAL);
         if (destination.ss_family != (socket.family == NET_AF_INET ? AF_INET : AF_INET6)) return fail(NET_EAFNOSUPPORT);
-        result = ::sendto(socket.native->value, static_cast<const char*>(buf), static_cast<int>(len), NATIVE_SEND_FLAGS,
+        result = ::sendto(socket.native->value, static_cast<const char*>(buf), static_cast<int>(len), native_send_flags(flags),
             reinterpret_cast<const sockaddr*>(&destination), destination_length);
+        if (s == g_telem_fd) {
+            const int error = result >= 0 ? 0 : native_error();
+            telem_log("sendto", 20, "fd %d %zu bytes to %s result %d errno %d", s, len, telem_address(destination).c_str(), result, error);
+            if (result < 0) return fail(error);
+        }
     }
+    if (!to && s == g_telem_fd) telem_log("sendto-connected", 20, "fd %d %zu bytes result %d", s, len, result);
     return result >= 0 ? result : fail(native_error());
 }
 
@@ -669,7 +809,10 @@ int64_t APS5_VABI sceNetSendmsg(int s, const NetMsghdr* msg, int flags) {
 int64_t APS5_VABI sceNetRecvmsg(int s, NetMsghdr* msg, int flags) {
     const auto total = message_length(msg);
     if (total < 0) return total;
-    if (flags != 0 && flags != NET_MSG_PEEK) return fail(NET_EOPNOTSUPP);
+    if (flags & ~(NET_MSG_PEEK | NET_MSG_DONTWAIT)) {
+        telem_log("recvmsg-flags", 5, "fd %d flags 0x%x rejected", s, flags);
+        return fail(NET_EOPNOTSUPP);
+    }
     Sock socket;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
@@ -677,6 +820,7 @@ int64_t APS5_VABI sceNetRecvmsg(int s, NetMsghdr* msg, int flags) {
         if (it == g_socks.end()) return fail(NET_EBADF);
         socket = it->second;
     }
+    if (would_block(socket.native->value, flags, false)) return fail(NET_EAGAIN);
     const bool datagram = socket.type != NET_SOCK_STREAM;
     std::vector<char> buffer;
     try {
@@ -687,7 +831,7 @@ int64_t APS5_VABI sceNetRecvmsg(int s, NetMsghdr* msg, int flags) {
     sockaddr_storage peer{};
     NativeLength peer_length = sizeof(peer);
     std::int64_t received = ::recvfrom(socket.native->value, buffer.data(), static_cast<int>(buffer.size()),
-        flags == NET_MSG_PEEK ? MSG_PEEK : 0, reinterpret_cast<sockaddr*>(&peer), &peer_length);
+        native_recv_flags(flags), reinterpret_cast<sockaddr*>(&peer), &peer_length);
     if (received < 0) {
 #ifdef _WIN32
         if (!datagram || WSAGetLastError() != WSAEMSGSIZE) return fail(native_error());
@@ -707,6 +851,7 @@ int64_t APS5_VABI sceNetRecvmsg(int s, NetMsghdr* msg, int flags) {
         std::memcpy(msg->iov[i].base, buffer.data() + offset, count);
         offset += count;
     }
+    if (s == g_telem_fd) telem_log("recvmsg", 20, "fd %d flags 0x%x %lld bytes from %s", s, flags, static_cast<long long>(received), telem_address(peer).c_str());
     if (msg->name && !native_to_guest_address(peer, msg->name, &msg->name_length)) msg->name_length = 0;
     msg->control_length = 0;
     return received;

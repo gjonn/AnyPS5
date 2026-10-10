@@ -89,6 +89,7 @@ static_assert(sizeof(BindingLayout) == 16, "BindingLayout changed: update BuildK
 namespace {
 
 constexpr std::uint32_t FileMagic = 0x43535041u;
+constexpr std::uint32_t SpirvMagic = 0x07230203u;
 
 struct FileHeader {
     std::uint32_t magic;
@@ -646,6 +647,7 @@ constexpr std::string_view NeutralSwitches[] = {
     "APS5_NO_CODE_HASH_KEY",
     "APS5_NO_FAILURE_MEMO",
     "APS5_NO_RESULT_MEMO",
+    "APS5_NO_SPECIALIZED_MODULE_CACHE",
 };
 
 const std::vector<std::byte>& switchKey() {
@@ -668,6 +670,32 @@ std::string hex(std::uint64_t value) {
     char text[17];
     std::snprintf(text, sizeof(text), "%016llx", static_cast<unsigned long long>(value));
     return text;
+}
+
+constexpr std::uint32_t ModuleKeyTag = 0x444f4d53u;
+
+std::vector<std::byte> frameEntry(std::span<const std::byte> key, std::span<const std::byte> payload) {
+    const FileHeader header{FileMagic, FormatVersion, Generated::SourceVersion, key.size(), payload.size(), HashBytes(key), HashBytes(payload)};
+    std::vector<std::byte> file(sizeof(header) + key.size() + payload.size());
+    std::memcpy(file.data(), &header, sizeof(header));
+    std::memcpy(file.data() + sizeof(header), key.data(), key.size());
+    std::memcpy(file.data() + sizeof(header) + key.size(), payload.data(), payload.size());
+    return file;
+}
+
+LoadStatus unframeEntry(std::span<const std::byte> file, std::span<const std::byte> key, std::span<const std::byte>& payload) {
+    if (file.size() < sizeof(FileHeader)) return LoadStatus::Rejected;
+    FileHeader header;
+    std::memcpy(&header, file.data(), sizeof(header));
+    if (header.magic != FileMagic || header.format != FormatVersion || header.sourceVersion != Generated::SourceVersion) return LoadStatus::Rejected;
+    const auto body = file.size() - sizeof(header);
+    if (header.keyBytes > body || header.payloadBytes != body - header.keyBytes) return LoadStatus::Rejected;
+    const auto storedKey = file.subspan(sizeof(header), static_cast<std::size_t>(header.keyBytes));
+    payload = file.subspan(sizeof(header) + static_cast<std::size_t>(header.keyBytes));
+    if (HashBytes(storedKey) != header.keyHash) return LoadStatus::Rejected;
+    if (storedKey.size() != key.size() || !std::equal(storedKey.begin(), storedKey.end(), key.begin())) return LoadStatus::KeyMismatch;
+    if (HashBytes(payload) != header.payloadHash) return LoadStatus::Rejected;
+    return LoadStatus::Loaded;
 }
 
 class DiskStore {
@@ -718,7 +746,33 @@ public:
     void Store(std::vector<std::byte> key, std::shared_ptr<const CompiledVariant> variant) {
         {
             std::lock_guard lock(mutex);
-            jobs.push_back({std::move(key), std::move(variant)});
+            jobs.push_back({std::move(key), std::move(variant), {}});
+        }
+        wake.notify_one();
+    }
+
+    bool LoadModule(std::span<const std::byte> key, SpecializedModuleEntry& module) {
+        const auto started = std::chrono::steady_clock::now();
+        thread_local std::vector<std::byte>* fileSlot = nullptr;
+        auto& file = ThreadOwned(fileSlot);
+        bool loaded = false;
+        if (ReadWholeFile(directory / EntryName(key), file)) {
+            const auto status = DecodeModuleEntry(file, key, module);
+            loaded = status == LoadStatus::Loaded;
+            if (loaded) bytesRead.fetch_add(file.size(), std::memory_order_relaxed);
+            else if (status == LoadStatus::Rejected) loadFailures.fetch_add(1, std::memory_order_relaxed);
+        }
+        (loaded ? moduleHits : moduleMisses).fetch_add(1, std::memory_order_relaxed);
+        if (file.capacity() > (4u << 20u)) std::vector<std::byte>().swap(file);
+        loadNanoseconds.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count()), std::memory_order_relaxed);
+        report(false);
+        return loaded;
+    }
+
+    void StoreModule(std::vector<std::byte> key, SpecializedModuleEntry module) {
+        {
+            std::lock_guard lock(mutex);
+            jobs.push_back({std::move(key), nullptr, std::make_shared<SpecializedModuleEntry>(std::move(module))});
         }
         wake.notify_one();
     }
@@ -737,6 +791,9 @@ public:
         counters.writeFailures = writeFailures.load(std::memory_order_relaxed);
         counters.bytesRead = bytesRead.load(std::memory_order_relaxed);
         counters.bytesWritten = bytesWritten.load(std::memory_order_relaxed);
+        counters.moduleHits = moduleHits.load(std::memory_order_relaxed);
+        counters.moduleMisses = moduleMisses.load(std::memory_order_relaxed);
+        counters.moduleWrites = moduleWrites.load(std::memory_order_relaxed);
         return counters;
     }
 
@@ -744,6 +801,7 @@ private:
     struct Job {
         std::vector<std::byte> key;
         std::shared_ptr<const CompiledVariant> variant;
+        std::shared_ptr<const SpecializedModuleEntry> module;
     };
 
     void run() {
@@ -770,9 +828,9 @@ private:
     }
 
     void write(const Job& job) {
-        const auto file = EncodeEntry(job.key, *job.variant);
+        const auto file = job.module != nullptr ? EncodeModuleEntry(job.key, *job.module) : EncodeEntry(job.key, *job.variant);
         if (WriteFileAtomically(directory / EntryName(job.key), file)) {
-            writes.fetch_add(1, std::memory_order_relaxed);
+            (job.module != nullptr ? moduleWrites : writes).fetch_add(1, std::memory_order_relaxed);
             bytesWritten.fetch_add(file.size(), std::memory_order_relaxed);
         } else {
             const auto failures = writeFailures.fetch_add(1, std::memory_order_relaxed);
@@ -822,11 +880,13 @@ private:
         const auto totals = Totals();
         const auto loadNs = loadNanoseconds.load(std::memory_order_relaxed);
         const auto delta = [](std::uint64_t after, std::uint64_t before) { return static_cast<unsigned long long>(after - before); };
-        if (totals.hits == reported.hits && totals.misses == reported.misses && totals.writes == reported.writes && totals.loadFailures == reported.loadFailures && totals.writeFailures == reported.writeFailures) return;
-        std::fprintf(stderr, "[shader-disk-cache] (10 s): %llu hits, %llu misses, %llu writes (%.1f MiB), %llu load failures, %llu write failures; %.1f MiB read in %.1f ms (totals: %llu hits, %llu misses, %llu writes)\n",
+        if (totals.hits == reported.hits && totals.misses == reported.misses && totals.writes == reported.writes && totals.loadFailures == reported.loadFailures && totals.writeFailures == reported.writeFailures && totals.moduleHits == reported.moduleHits && totals.moduleMisses == reported.moduleMisses && totals.moduleWrites == reported.moduleWrites) return;
+        std::fprintf(stderr, "[shader-disk-cache] (10 s): %llu hits, %llu misses, %llu writes (%.1f MiB), %llu load failures, %llu write failures; %.1f MiB read in %.1f ms; specialized modules %llu hits, %llu misses, %llu writes (totals: %llu hits, %llu misses, %llu writes; modules %llu hits, %llu misses, %llu writes)\n",
                      delta(totals.hits, reported.hits), delta(totals.misses, reported.misses), delta(totals.writes, reported.writes), static_cast<double>(totals.bytesWritten - reported.bytesWritten) / (1024.0 * 1024.0),
                      delta(totals.loadFailures, reported.loadFailures), delta(totals.writeFailures, reported.writeFailures), static_cast<double>(totals.bytesRead - reported.bytesRead) / (1024.0 * 1024.0), static_cast<double>(loadNs - reportedLoadNs) / 1e6,
-                     static_cast<unsigned long long>(totals.hits), static_cast<unsigned long long>(totals.misses), static_cast<unsigned long long>(totals.writes));
+                     delta(totals.moduleHits, reported.moduleHits), delta(totals.moduleMisses, reported.moduleMisses), delta(totals.moduleWrites, reported.moduleWrites),
+                     static_cast<unsigned long long>(totals.hits), static_cast<unsigned long long>(totals.misses), static_cast<unsigned long long>(totals.writes),
+                     static_cast<unsigned long long>(totals.moduleHits), static_cast<unsigned long long>(totals.moduleMisses), static_cast<unsigned long long>(totals.moduleWrites));
         reported = totals;
         reportedLoadNs = loadNs;
     }
@@ -838,7 +898,7 @@ private:
     std::condition_variable idle;
     std::deque<Job> jobs;
     bool writing = false;
-    std::atomic<std::uint64_t> hits{0}, misses{0}, writes{0}, loadFailures{0}, writeFailures{0}, bytesRead{0}, bytesWritten{0}, loadNanoseconds{0};
+    std::atomic<std::uint64_t> hits{0}, misses{0}, writes{0}, loadFailures{0}, writeFailures{0}, bytesRead{0}, bytesWritten{0}, loadNanoseconds{0}, moduleHits{0}, moduleMisses{0}, moduleWrites{0};
     std::atomic<std::int64_t> lastReport{0};
     std::mutex reportMutex;
     Counters reported;
@@ -901,26 +961,12 @@ std::vector<std::byte> EncodeEntry(std::span<const std::byte> key, const Compile
     encodeArtifact(writer, variant.artifact);
     encodeInfo(writer, variant.info);
     encodeAllocation(writer, variant.bindings);
-    const FileHeader header{FileMagic, FormatVersion, SourceVersion(), key.size(), payload.size(), HashBytes(key), HashBytes(payload)};
-    std::vector<std::byte> file(sizeof(header) + key.size() + payload.size());
-    std::memcpy(file.data(), &header, sizeof(header));
-    std::memcpy(file.data() + sizeof(header), key.data(), key.size());
-    std::memcpy(file.data() + sizeof(header) + key.size(), payload.data(), payload.size());
-    return file;
+    return frameEntry(key, payload);
 }
 
 LoadStatus DecodeEntry(std::span<const std::byte> file, std::span<const std::byte> key, CompiledVariant& variant) {
-    if (file.size() < sizeof(FileHeader)) return LoadStatus::Rejected;
-    FileHeader header;
-    std::memcpy(&header, file.data(), sizeof(header));
-    if (header.magic != FileMagic || header.format != FormatVersion || header.sourceVersion != SourceVersion()) return LoadStatus::Rejected;
-    const auto body = file.size() - sizeof(header);
-    if (header.keyBytes > body || header.payloadBytes != body - header.keyBytes) return LoadStatus::Rejected;
-    const auto storedKey = file.subspan(sizeof(header), static_cast<std::size_t>(header.keyBytes));
-    const auto payload = file.subspan(sizeof(header) + static_cast<std::size_t>(header.keyBytes));
-    if (HashBytes(storedKey) != header.keyHash) return LoadStatus::Rejected;
-    if (storedKey.size() != key.size() || !std::equal(storedKey.begin(), storedKey.end(), key.begin())) return LoadStatus::KeyMismatch;
-    if (HashBytes(payload) != header.payloadHash) return LoadStatus::Rejected;
+    std::span<const std::byte> payload;
+    if (const auto status = unframeEntry(file, key, payload); status != LoadStatus::Loaded) return status;
     Reader reader(payload);
     CompiledVariant decoded;
     decodeArtifact(reader, decoded.artifact);
@@ -930,6 +976,58 @@ LoadStatus DecodeEntry(std::span<const std::byte> file, std::span<const std::byt
     variant.info = std::move(decoded.info);
     variant.bindings = std::move(decoded.bindings);
     variant.artifact = std::move(decoded.artifact);
+    return LoadStatus::Loaded;
+}
+
+void BuildModuleKey(std::span<const std::uint32_t> spirv, std::span<const VertexInputPatch> patches, std::span<const std::uint32_t> classes, std::span<const PipelineSpecializationConstant> constants, const SpecializationTarget& target, std::vector<std::byte>& key) {
+    key.clear();
+    Writer writer(key);
+    writer.Value(ModuleKeyTag);
+    writer.Value(FormatVersion);
+    writer.Value(SourceVersion());
+    const auto words = std::as_bytes(spirv);
+    writer.Value<std::uint64_t>(spirv.size());
+    writer.Value(HashBytes(words, 0x5eed0003ull));
+    writer.Value(HashBytes(words, 0x5eed0004ull));
+    writer.Value<std::uint64_t>(patches.size());
+    for (const auto& patch : patches) {
+        writer.Value(patch.location);
+        writer.Value(patch.word);
+        writer.Values(std::span<const std::uint32_t>(patch.values));
+    }
+    writer.Values(classes);
+    writer.Value<std::uint64_t>(constants.size());
+    for (const auto& constant : constants) {
+        writer.Value(constant.id);
+        writer.Value(constant.value);
+    }
+    writer.Value(target.vulkanVersion);
+    writer.Value(target.spirvVersion);
+    writer.Value(target.nonConstantImageOffsets);
+    const auto& switches = switchKey();
+    key.insert(key.end(), switches.begin(), switches.end());
+}
+
+std::vector<std::byte> EncodeModuleEntry(std::span<const std::byte> key, const SpecializedModuleEntry& module) {
+    std::vector<std::byte> payload;
+    payload.reserve((module.spirv.size() + module.bindings.size()) * sizeof(std::uint32_t) + 32);
+    Writer writer(payload);
+    writer.Values(std::span<const std::uint32_t>(module.spirv));
+    writer.Values(std::span<const std::uint32_t>(module.bindings));
+    writer.Value(module.pushData);
+    return frameEntry(key, payload);
+}
+
+LoadStatus DecodeModuleEntry(std::span<const std::byte> file, std::span<const std::byte> key, SpecializedModuleEntry& module) {
+    std::span<const std::byte> payload;
+    if (const auto status = unframeEntry(file, key, payload); status != LoadStatus::Loaded) return status;
+    Reader reader(payload);
+    SpecializedModuleEntry decoded;
+    reader.Values(decoded.spirv);
+    reader.Values(decoded.bindings);
+    reader.Value(decoded.pushData);
+    if (!reader.Done() || decoded.spirv.size() < 5u || decoded.spirv[0] != SpirvMagic) return LoadStatus::Rejected;
+    module = std::move(decoded);
     return LoadStatus::Loaded;
 }
 
@@ -949,6 +1047,16 @@ bool Load(std::span<const std::byte> key, CompiledVariant& variant) {
 void Store(std::vector<std::byte> key, std::shared_ptr<const CompiledVariant> variant) {
     auto& instance = store();
     if (instance.Enabled()) instance.Store(std::move(key), std::move(variant));
+}
+
+bool LoadModule(std::span<const std::byte> key, SpecializedModuleEntry& module) {
+    auto& instance = store();
+    return instance.Enabled() && instance.LoadModule(key, module);
+}
+
+void StoreModule(std::vector<std::byte> key, SpecializedModuleEntry module) {
+    auto& instance = store();
+    if (instance.Enabled()) instance.StoreModule(std::move(key), std::move(module));
 }
 
 void Flush() {

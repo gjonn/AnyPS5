@@ -42,6 +42,8 @@
 
 namespace AgcDriver::DriverDetail {
 
+class ShaderPreparationTransaction;
+
 class Driver {
 public:
     static Driver& Get();
@@ -60,12 +62,21 @@ public:
     void ResolveShaderAbi(const Shader* shader, std::span<const ShaderRegister> context, std::span<const ShaderRegister> primitive);
     void ResolveGraphicsStagesAbi(std::span<const Shader* const> stages, std::span<const ShaderRegister> context, std::span<const ShaderRegister> primitive);
     void ResolveGraphicsAbi(const Shader* vertex, const Shader* pixel, std::uint32_t primitiveType);
+    // Frame capture and replay (Capture/FrameCapture.cpp, Capture/FrameReplay.cpp).
+    bool Settle(std::chrono::milliseconds limit);
+    std::vector<std::byte> SaveCaptureState();
+    void RestoreCaptureState(std::span<const std::byte> state, bool prepareShaders);
+    std::vector<std::uint32_t> VideoOutputHandles();
+    void RestoreShader(std::uint64_t codeAddress, std::uint64_t headerAddress, std::uint8_t type, std::vector<std::uint32_t> code, std::vector<std::byte> header, bool prepare);
+    void RestoreRegistry(std::vector<ShaderSnapshot> snapshots, bool prepare);
 
 private:
     friend class SampledReadScope;
     friend struct PendingView;
     friend struct PacketTimer;
     void stop();
+    void registerSnapshot(ShaderSnapshot snapshot, ShaderPreparationTransaction& transaction, bool prepare);
+    void publishNullPixelShader(const VulkanDevice& localDevice);
     Driver();
     void rethrowFailure() const;
     void checkStopping() const;

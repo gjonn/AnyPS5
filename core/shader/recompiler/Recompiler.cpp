@@ -7,6 +7,7 @@
 #include "CacheKey.hpp"
 #include "CompiledVariant.hpp"
 #include "VertexInputSpecialization.hpp"
+#include "FragmentOutputSpecialization.hpp"
 #include "SpirvBackend/SpirvSpecialization.hpp"
 #include "RdnaDecoder/RdnaDescriptorFormat.hpp"
 #include "ShaderDiskCache.hpp"
@@ -18,6 +19,7 @@
 #include <shared_mutex>
 #include <unordered_map>
 #include "ControlFlow/include/ControlFlow/GraphBuilder.hpp"
+#include "ControlFlow/UserDataCalls.hpp"
 #include "ControlFlow/include/ControlFlow/Structurizer.hpp"
 #include "RdnaDecoder/include/RdnaDecoder/RdnaInstructionDecoder.hpp"
 #include "IntermediateRepresentation/include/IntermediateRepresentation/IrProgram.hpp"
@@ -95,17 +97,40 @@ ShaderStageInputInfo RequestInputInfo(const RecompileRequest& request) {
     return BuildShaderStageInputInfo(toShaderStageKind(request.shader.stage), request.context, HostSubgroupSize(request), mesh, tessellation);
 }
 
+bool capturedCallsMatchUserData(std::span<const CapturedShaderCall> calls, std::span<const std::uint32_t> userData) {
+    for (const auto& call : calls) {
+        if (call.userDataIndex >= userData.size() || userData.size() - call.userDataIndex < 2u) return false;
+        const auto address = static_cast<std::uint64_t>(userData[call.userDataIndex]) | (static_cast<std::uint64_t>(userData[call.userDataIndex + 1u]) << 32u);
+        if (address != call.targetAddress) return false;
+    }
+    return true;
+}
+
 }
 
 IrProgram PrepareResourceProgram(const RecompileRequest& request) {
+    if (!capturedCallsMatchUserData(request.shader.capturedCalls, request.context.userData)) throw std::invalid_argument("captured scalar call targets do not match invocation user data");
     const auto stageKind = toShaderStageKind(request.shader.stage);
     const auto inputInfo = RequestInputInfo(request);
 
-    constexpr RdnaInstructionDecoder decoder;
-    const auto decoded = decoder.Decode(request.shader.code);
+    const auto decoded = DecodeShaderProgram(request.shader);
 
     constexpr GraphBuilder graphBuilder;
-    auto cfg = graphBuilder.Build(decoded);
+    SwappcInfo swappcInfo;
+    swappcInfo.fetchCallAllowed = inputInfo.vertex != nullptr;
+    swappcInfo.userDataBaseRegister = request.context.userDataBaseRegister;
+    swappcInfo.userDataCount = static_cast<std::uint32_t>(request.context.userData.size());
+    swappcInfo.capturedCalls = request.shader.capturedCalls;
+    if (!request.shader.capturedCalls.empty()) {
+        const auto targets = AnalyzeUserDataCalls(decoded, swappcInfo);
+        if (targets.size() != request.shader.capturedCalls.size()) throw std::invalid_argument("captured scalar call provenance does not match the program");
+        for (std::size_t index = 0; index < targets.size(); ++index) {
+            if (decoded.instructions[targets[index].callIndex].programCounter != request.shader.capturedCalls[index].callProgramCounter || targets[index].userDataIndex != request.shader.capturedCalls[index].userDataIndex) {
+                throw std::invalid_argument("captured scalar call provenance does not match the call site");
+            }
+        }
+    }
+    auto cfg = graphBuilder.Build(decoded, &swappcInfo);
 
     constexpr Structurizer structurizer;
     structurizer.Structurize(cfg);
@@ -201,6 +226,7 @@ struct SourceEntry {
     // accepted only when its code matches word for word. Owned here because the request's span
     // points into a registration the driver may replace while the entry lives on.
     std::vector<std::uint32_t> code;
+    std::vector<CapturedShaderCall> capturedCalls;
     std::shared_ptr<const IrResourcePlan> plan;
     // A plan build that threw (an unsupported resource chain or control flow) is remembered and
     // rethrown: the front end ran every pass before failing, ~13 ms per dispatch of a shader the
@@ -244,6 +270,7 @@ bool FailureMemo() {
 }
 
 std::shared_ptr<SourceEntry> getSource(const RecompileRequest& request) {
+    if (!capturedCallsMatchUserData(request.shader.capturedCalls, request.context.userData)) throw std::invalid_argument("captured scalar call targets do not match invocation user data");
     static std::shared_mutex mutex;
     // Entries whose code hashes alike share a bucket; the code comparison picks the right one.
     static std::unordered_map<std::vector<std::uint64_t>, std::vector<std::shared_ptr<SourceEntry>>, SourceKeyHash> sources;
@@ -270,6 +297,7 @@ std::shared_ptr<SourceEntry> getSource(const RecompileRequest& request) {
         if (source == nullptr) {
             source = std::make_shared<SourceEntry>();
             source->code.assign(request.shader.code.begin(), request.shader.code.end());
+            source->capturedCalls.assign(request.shader.capturedCalls.begin(), request.shader.capturedCalls.end());
             auto& bucket = sources[key];
             if (!bucket.empty()) {
                 // A second entry under one key is a code hash collision (or the unhashed key with
@@ -410,6 +438,7 @@ std::shared_ptr<const SpecializedModule> buildSpecializedModule(const CompiledSh
         if (!supplied.emplace(constant.id, constant.value).second) throw std::runtime_error("duplicate prepared specialization ID");
     }
     std::map<std::uint32_t, std::uint32_t> values;
+    std::set<std::uint32_t> specializedIds;
     const auto& words = source.Words();
     if (words.size() < 5u || words[0] != spv::MagicNumber) throw std::runtime_error("invalid prepared specialization module");
     for (std::size_t cursor = 5; cursor < words.size();) {
@@ -419,6 +448,7 @@ std::shared_ptr<const SpecializedModule> buildSpecializedModule(const CompiledSh
         if (op == spv::OpDecorate && count == 4u && words[cursor + 2u] == spv::DecorationSpecId) {
             const auto found = supplied.find(words[cursor + 3u]);
             if (found == supplied.end() || !values.emplace(words[cursor + 1u], found->second).second) throw std::runtime_error("missing or duplicate prepared specialization value");
+            specializedIds.insert(found->first);
         }
         cursor += count;
     }
@@ -434,7 +464,7 @@ std::shared_ptr<const SpecializedModule> buildSpecializedModule(const CompiledSh
         }
         cursor += count;
     }
-    materialized = SpecializeSpirv(materialized);
+    materialized = SpecializeFragmentOutputs(SpecializeSpirv(materialized), constants, specializedIds);
 #if ANYPS5_ENABLE_SPIRV_TOOLS
     materialized = ValidateAndOptimizeSpirv(materialized, target.vulkanVersion, target.spirvVersion, target.nonConstantImageOffsets, true, true);
 #endif
@@ -488,13 +518,34 @@ std::shared_ptr<const SpecializedModule> buildSpecializedModule(const CompiledSh
     return module;
 }
 
+std::shared_ptr<const SpecializedModule> loadOrBuildSpecializedModule(const CompiledShaderArtifact& artifact, std::span<const std::uint32_t> classes, std::span<const PipelineSpecializationConstant> constants, const SpirvTarget& target) {
+    static const bool moduleCache = std::getenv("APS5_NO_SPECIALIZED_MODULE_CACHE") == nullptr;
+    if (!moduleCache || !ShaderDiskCache::Enabled() || DebugProbeActive()) return buildSpecializedModule(artifact, classes, constants, target);
+    std::vector<std::byte> key;
+    ShaderDiskCache::BuildModuleKey(artifact.spirv.Words(), artifact.vertexInputPatches, classes, constants, {target.vulkanVersion, target.spirvVersion, target.nonConstantImageOffsets}, key);
+    ShaderDiskCache::SpecializedModuleEntry cached;
+    if (ShaderDiskCache::LoadModule(key, cached)) {
+        auto module = std::make_shared<SpecializedModule>();
+        module->spirv = std::move(cached.spirv);
+        module->bindings = std::move(cached.bindings);
+        module->pushData = cached.pushData;
+        module->specializationId = constants.empty() ? 0u : nextVariantId();
+        return module;
+    }
+    auto module = buildSpecializedModule(artifact, classes, constants, target);
+    ShaderDiskCache::StoreModule(std::move(key), {module->spirv.Words(), module->bindings, module->pushData});
+    return module;
+}
+
 struct SpecializedModuleEntry {
     std::once_flag ready;
+    std::exception_ptr failure;
     std::shared_ptr<const SpecializedModule> module;
 };
 
 struct PreparedModuleEntry {
     std::once_flag ready;
+    std::exception_ptr failure;
     std::shared_ptr<const SpecializedModule> module;
     DescriptorBindingPlan bindings;
 };
@@ -575,7 +626,14 @@ std::shared_ptr<const SpecializedModule> specializeModule(const CompiledShaderAr
         const auto found = modules.find(key);
         entry = found != modules.end() ? found->second : modules.emplace(key, std::make_shared<SpecializedModuleEntry>()).first->second;
     }
-    std::call_once(entry->ready, [&] { entry->module = buildSpecializedModule(artifact, classes, constants, target); });
+    std::call_once(entry->ready, [&] {
+        try {
+            entry->module = loadOrBuildSpecializedModule(artifact, classes, constants, target);
+        } catch (...) {
+            entry->failure = std::current_exception();
+        }
+    });
+    if (entry->failure) std::rethrow_exception(entry->failure);
     return entry->module;
 }
 
@@ -609,6 +667,9 @@ RecompileResult materializeResult(const CompiledVariant& variant, const Recompil
     auto& moduleKey = HostThreadLocal<std::vector<std::uint32_t>, LocalModuleKeyStorage>();
     moduleKey.clear();
     if (variant.bindings.layout.UsesPushData()) moduleKey.push_back(request.layout.pushConstantOffsetBytes / 4u);
+    if (request.context.pixel) {
+        for (const auto packing : request.context.pixel->targetExportPacking) moduleKey.push_back(static_cast<std::uint32_t>(packing));
+    }
     result.vertexAttributes.reserve(result.vertexInputs.size());
     std::array<std::uint32_t, ShaderVertexStageInfo::MaxResources> vertexClasses{};
     for (const auto& input : result.vertexInputs) {
@@ -634,7 +695,7 @@ RecompileResult materializeResult(const CompiledVariant& variant, const Recompil
             moduleKey.push_back(selectors);
         }
     }
-    if (!plan->bindings.specialization.empty() || variant.bindings.layout.UsesPushData() || !artifact.vertexInputPatches.empty()) {
+    if (!plan->bindings.specialization.empty() || variant.bindings.layout.UsesPushData() || !artifact.vertexInputPatches.empty() || request.context.pixel) {
         {
             std::shared_lock lock(plan->mutex);
             if (const auto found = plan->modules.find(moduleKey); found != plan->modules.end()) entry = found->second;
@@ -644,10 +705,13 @@ RecompileResult materializeResult(const CompiledVariant& variant, const Recompil
             const auto found = plan->modules.find(moduleKey);
             entry = found != plan->modules.end() ? found->second : plan->modules.emplace(moduleKey, std::make_shared<PreparedModuleEntry>()).first->second;
         }
-        std::call_once(entry->ready, [&] {
+        const auto prepare = [&] {
             auto constants = plan->bindings.specialization;
             std::size_t index = 0;
             if (variant.bindings.layout.UsesPushData()) constants.push_back({PipelineSpecialization::PushDataOffset, moduleKey[index++]});
+            if (request.context.pixel) {
+                for (std::uint32_t target = 0; target < request.context.pixel->targetExportPacking.size(); ++target) constants.push_back({PipelineSpecialization::ExportPackingBase + target, moduleKey[index++]});
+            }
             if (!artifact.vertexInputPatches.empty()) {
                 for (const auto& input : result.vertexInputs) {
                     const auto selectors = moduleKey[index++];
@@ -663,7 +727,15 @@ RecompileResult materializeResult(const CompiledVariant& variant, const Recompil
             auto selected = DescriptorBindingBuilder{}.Select(plan->bindings, module->bindings);
             entry->bindings = std::move(selected);
             entry->module = module;
+        };
+        std::call_once(entry->ready, [&] {
+            try {
+                prepare();
+            } catch (...) {
+                entry->failure = std::current_exception();
+            }
         });
+        if (entry->failure) std::rethrow_exception(entry->failure);
         const auto& module = entry->module;
         result.specializationId = module->specializationId;
         result.spirv = module->spirv;
@@ -822,6 +894,7 @@ std::uint64_t snapshotHash(const RecompileRequest& request, const ResourceSnapsh
     mix(request.layout.pushConstantOffsetBytes);
     if (request.context.pixel) {
         for (const auto mapping : request.context.pixel->targetExportMapping) mix(mapping);
+        for (const auto packing : request.context.pixel->targetExportPacking) mix(static_cast<std::uint64_t>(packing));
     }
     if (request.context.vertex) {
         const auto& vertex = *request.context.vertex;
@@ -954,6 +1027,7 @@ void materializeCapture(ResourceCapture& capture, const SrtRuntime& runtime) {
 }
 
 std::shared_ptr<const ResourceCapture> CaptureResources(const RecompileRequest& request, const SrtRuntime& runtime) {
+    if (!capturedCallsMatchUserData(request.shader.capturedCalls, runtime.userData)) throw std::invalid_argument("captured scalar call targets do not match capture user data");
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
     const auto started = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     // Validates the stage inputs once per request, as GetResourcePlan and Recompile(request) do.
@@ -1003,6 +1077,7 @@ void BuildPreparedShaderKey(const RecompileRequest& request, std::vector<std::ui
 }
 
 bool MatchesPreparedShader(const RecompileRequest& request, const SourceHandle& handle, std::span<const std::uint64_t> key) {
+    if (!capturedCallsMatchUserData(request.shader.capturedCalls, request.context.userData)) return false;
     if (handle.source == nullptr || handle.artifact == nullptr) return false;
     const auto& layout = request.layout;
     const auto& prepared = handle.artifact->bindings.layout;
@@ -1020,7 +1095,15 @@ std::span<const std::uint32_t> GetPreparedCode(const SourceHandle& handle) {
     return handle.source->code;
 }
 
-PreparedShaderInvocation::PreparedShaderInvocation(const RecompileRequest& request, const std::shared_ptr<const SourceHandle>& handle) : request(request), handle(handle) {}
+std::span<const CapturedShaderCall> GetPreparedCalls(const SourceHandle& handle) {
+    if (handle.source == nullptr || handle.artifact == nullptr) throw std::runtime_error("ShaderRecompiler: prepared artifact is missing");
+    return handle.source->capturedCalls;
+}
+
+PreparedShaderInvocation::PreparedShaderInvocation(const RecompileRequest& request, const std::shared_ptr<const SourceHandle>& handle) : request(request), handle(handle) {
+    this->request.shader.code = handle->source->code;
+    this->request.shader.capturedCalls = handle->source->capturedCalls;
+}
 
 std::optional<PreparedShaderInvocation> PreparedShaderInvocation::TryCreate(const RecompileRequest& request, const std::shared_ptr<const SourceHandle>& handle) {
     struct PreparedKeyStorage {};
@@ -1036,6 +1119,7 @@ std::optional<PreparedShaderInvocation> PreparedShaderInvocation::TryCreate(cons
 }
 
 std::shared_ptr<const ResourceCapture> PreparedShaderInvocation::Capture(const SrtRuntime& runtime) const {
+    if (!capturedCallsMatchUserData(handle->source->capturedCalls, runtime.userData)) throw std::invalid_argument("captured scalar call targets do not match capture user data");
     auto capture = std::make_shared<ResourceCapture>();
     capture->source = handle->source;
     capture->plan = handle->source->plan;
@@ -1044,6 +1128,7 @@ std::shared_ptr<const ResourceCapture> PreparedShaderInvocation::Capture(const S
 }
 
 std::shared_ptr<const RecompileResult> PreparedShaderInvocation::Materialize(const ResourceCapture& capture) const {
+    if (!capturedCallsMatchUserData(handle->source->capturedCalls, request.context.userData)) throw std::invalid_argument("captured scalar call targets do not match invocation user data");
     if (capture.source != handle->source || capture.plan != handle->source->plan) throw std::runtime_error("ShaderRecompiler: resource capture belongs to another prepared shader");
     if (request.useCache && ResultMemo()) return materializePreparedMemoized(*handle->source, handle->artifact, request, capture.snapshot, true, nullptr);
     auto result = std::make_shared<RecompileResult>(materializeResult(*handle->artifact, request, capture.snapshot));
@@ -1067,6 +1152,7 @@ std::shared_ptr<const RecompileResult> MaterializeShader(const RecompileRequest&
 
 std::shared_ptr<const ResourceCapture> CaptureResources(const RecompileRequest& request, const SrtRuntime& runtime, const SourceHandle& handle) {
     if (handle.source == nullptr) throw std::runtime_error("ShaderRecompiler: source handle is missing");
+    if (!capturedCallsMatchUserData(handle.source->capturedCalls, runtime.userData)) throw std::invalid_argument("captured scalar call targets do not match capture user data");
     if (handle.artifact != nullptr && !MatchesPreparedShader(request, handle)) throw std::runtime_error("ShaderRecompiler: prepared artifact does not match the static ABI");
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
     const auto started = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};

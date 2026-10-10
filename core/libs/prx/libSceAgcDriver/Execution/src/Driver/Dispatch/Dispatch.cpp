@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Execution/include/ProfileOutput.hpp"
+#include "Optimization/ShaderStageInputInfo.hpp"
 #include "prx/libSceAgcDriver/Execution/include/PerformanceTimer.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Draw/DrawPipeline.hpp"
@@ -196,11 +197,12 @@ void Driver::dispatch(QueueState& queue, std::span<const std::uint32_t> packet, 
         static const bool dumpShaders = std::getenv("APS5_DUMP_SHADERS") != nullptr;
         static const bool dumpFailures = std::getenv("APS5_DUMP_SHADER_FAILURES") != nullptr;
         try {
-            const auto invocation = InvocationFor(snapshot, codeOffset, request);
-            timing.Mark("prepared_invocation");
-
             const auto waitedBefore = traceCapSync() ? Graphics::Recorder::ThreadWaitedMs() : 0.0;
             forgetAtCapture = GuestMemory::ForgetSerial();
+            const auto invocation = InvocationFor(snapshot, codeOffset, request, shaderMemory.get());
+            request.shader = invocation.Request().shader;
+            timing.Mark("prepared_invocation");
+
             capture = [&] {
                 const SampledReadScope sampling(evidenceReads);
                 return shaderMemory->Capture(invocation);
@@ -363,6 +365,20 @@ void Driver::dispatch(QueueState& queue, std::span<const std::uint32_t> packet, 
     }
     phaseTiming.Phase(PhaseDevice);
     if (noteWrites && !writerKeyedEvidence()) noteWrittenBuffers(address, submission.queue, compiled);
+    static const std::uint64_t traceWrite = [] { const char* text = std::getenv("APS5_TRACE_WRITE_ADDRESS"); return text != nullptr ? std::strtoull(text, nullptr, 0) : 0ull; }();
+    if (traceWrite != 0) {
+        for (const auto& binding : compiled.bindings) {
+            if (binding.role != ShaderRecompiler::DescriptorRole::GuestBuffers) continue;
+            for (std::uint32_t element = 0; element < binding.count && binding.guestDescriptor.size() >= (static_cast<std::size_t>(element) + 1) * 4; ++element) {
+                const auto words = std::span<const std::uint32_t>(binding.guestDescriptor).subspan(static_cast<std::size_t>(element) * 4, 4);
+                const ShaderRecompiler::ShaderBufferResource descriptor{{words[0], words[1], words[2], words[3]}};
+                const auto begin = descriptor.Base48();
+                const auto end = begin + descriptor.GetSize();
+                const bool written = element >= binding.bufferWritten.size() || binding.bufferWritten[element];
+                if (begin <= traceWrite && traceWrite < end) std::fprintf(stderr, "[trace-write] dispatch shader 0x%llx queue 0x%x %s buffer element %u 0x%llx-0x%llx over 0x%llx\n", static_cast<unsigned long long>(address), submission.queue, written ? "writes" : "reads", element, static_cast<unsigned long long>(begin), static_cast<unsigned long long>(end), static_cast<unsigned long long>(traceWrite));
+            }
+        }
+    }
     deviceMs += phaseTiming.Elapsed();
     phaseTiming.Phase(PhaseTail);
     if (profile) {

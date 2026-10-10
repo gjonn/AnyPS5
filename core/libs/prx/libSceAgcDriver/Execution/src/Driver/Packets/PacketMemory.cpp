@@ -96,6 +96,10 @@ bool Driver::preparePacketMemory(const Submission& submission, QueueState& queue
         }
     }
     if (opcode == 0x50 && packet.size() >= 7) {
+        static const std::uint64_t traceWrite = [] { const char* text = std::getenv("APS5_TRACE_WRITE_ADDRESS"); return text != nullptr ? std::strtoull(text, nullptr, 0) : 0ull; }();
+        const auto dmaDestination = packet[4] | (static_cast<std::uint64_t>(packet[5]) << 32u);
+        if (traceWrite != 0 && Pm4::DmaDestination(packet) != 1 && dmaDestination <= traceWrite && traceWrite < dmaDestination + (packet[6] & 0x3ffffffu)) std::fprintf(stderr, "[trace-write] DMA_DATA source %u dst 0x%llx+0x%x data/src 0x%08x over 0x%llx\n", Pm4::DmaSource(packet), static_cast<unsigned long long>(dmaDestination), packet[6] & 0x3ffffffu, packet[2], static_cast<unsigned long long>(traceWrite));
+        if (Pm4::DmaSource(packet) == 2 && Pm4::DmaDestination(packet) != 1) Graphics::TraceDepthMetadataFill(packet[4] | (static_cast<std::uint64_t>(packet[5]) << 32u), packet[6] & 0x3ffffffu, packet[2], true, "dma");
         if (Pm4::DmaSource(packet) == 2 && Pm4::DmaDestination(packet) != 1) Graphics::NoteDepthMetadataFill(packet[4] | (static_cast<std::uint64_t>(packet[5]) << 32u), packet[6] & 0x3ffffffu, packet[2]);
     }
     if (!drainAll && !endOfPipeInterrupt && (opcode == 0x49 || opcode == 0x37)) {
